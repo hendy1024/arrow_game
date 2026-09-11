@@ -1,0 +1,36 @@
+{
+  "browser": "Edg/152.0.4191.66",
+  "environment": "Windows headless Edge; not a phone or WeChat device",
+  "checks": [
+    "home-start",
+    "snake-and-win",
+    "modal-flow",
+    "lives-and-retry",
+    "reload-recovery",
+    "small-screen",
+    "pixels-and-no-errors",
+    "debug-hidden",
+    "local-performance",
+    "recorded-movement"
+  ],
+  "screenshots": [
+    "home.png",
+    "tutorial.png",
+    "snake-moving.png",
+    "won.png",
+    "pause.png",
+    "challenge.png",
+    "failed.png",
+    "small-challenge.png",
+    "small-pause.png"
+  ],
+  "performance": {
+    "medianMs": 16.69999999999999,
+    "p95Ms": 16.700000000000045,
+    "averageMs": 16.666666666666668,
+    "heapBefore": 988568,
+    "heapAfter": 1104388,
+    "iterations": 200
+  },
+  "video": "snake-and-parallel.webm"
+}

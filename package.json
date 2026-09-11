@@ -1,0 +1,15 @@
+{
+  "name": "arrow-garden-minigame",
+  "version": "0.1.0",
+  "private": true,
+  "description": "微信折线箭头消除小游戏，零运行时依赖",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node scripts/test.cjs",
+    "check": "node scripts/check.cjs",
+    "build": "node scripts/build.cjs",
+    "dev": "node scripts/serve.cjs",
+    "validate:levels": "node scripts/validate-levels.cjs",
+    "verify:devices": "node scripts/verify-devices.cjs"
+  }
+}

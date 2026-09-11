@@ -1,0 +1,77 @@
+{
+  "countPerTier": 200,
+  "total": 1000,
+  "failures": [],
+  "tiers": [
+    {
+      "name": "初见",
+      "number": 2,
+      "samples": 200,
+      "fallbacks": 0,
+      "meanAttempts": 1,
+      "meanMs": 0.16567149999999914,
+      "p95Ms": 1.1326999999999998,
+      "maxMs": 2.822400000000002,
+      "minFill": 0.3888888888888889,
+      "maxFill": 0.5,
+      "meanDepth": 1.695,
+      "meanOpenRatio": 0.8084761904761905
+    },
+    {
+      "name": "寻路",
+      "number": 4,
+      "samples": 200,
+      "fallbacks": 0,
+      "meanAttempts": 1.16,
+      "meanMs": 0.18941199999999894,
+      "p95Ms": 0.718100000000021,
+      "maxMs": 2.9199000000000126,
+      "minFill": 0.515625,
+      "maxFill": 0.625,
+      "meanDepth": 2.775,
+      "meanOpenRatio": 0.58504884004884
+    },
+    {
+      "name": "交错",
+      "number": 9,
+      "samples": 200,
+      "fallbacks": 0,
+      "meanAttempts": 1.295,
+      "meanMs": 0.27460449999999753,
+      "p95Ms": 0.7010999999999967,
+      "maxMs": 3.084000000000003,
+      "minFill": 0.64,
+      "maxFill": 0.73,
+      "meanDepth": 3.43,
+      "meanOpenRatio": 0.5384531069420773
+    },
+    {
+      "name": "解围",
+      "number": 16,
+      "samples": 200,
+      "fallbacks": 0,
+      "meanAttempts": 1.995,
+      "meanMs": 0.9916050000000013,
+      "p95Ms": 3.364599999999996,
+      "maxMs": 7.429300000000012,
+      "minFill": 0.7013888888888888,
+      "maxFill": 0.8194444444444444,
+      "meanDepth": 4.51,
+      "meanOpenRatio": 0.4627580631947134
+    },
+    {
+      "name": "从容",
+      "number": 21,
+      "samples": 200,
+      "fallbacks": 0,
+      "meanAttempts": 8.13,
+      "meanMs": 4.198544500000004,
+      "p95Ms": 12.130599999999959,
+      "maxMs": 23.613000000000056,
+      "minFill": 0.75,
+      "maxFill": 0.8472222222222222,
+      "meanDepth": 5.375,
+      "meanOpenRatio": 0.4158889046123481
+    }
+  ]
+}

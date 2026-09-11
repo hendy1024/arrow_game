@@ -1,0 +1,159 @@
+{
+  "generatedAt": "2026-09-11T14:11:25.869Z",
+  "node": "v24.14.0",
+  "automated": {
+    "status": "passed",
+    "tests": 73,
+    "pass": 73,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "generation": {
+    "countPerTier": 200,
+    "total": 1000,
+    "failures": [],
+    "tiers": [
+      {
+        "name": "初见",
+        "number": 2,
+        "samples": 200,
+        "fallbacks": 0,
+        "meanAttempts": 1,
+        "meanMs": 0.16567149999999914,
+        "p95Ms": 1.1326999999999998,
+        "maxMs": 2.822400000000002,
+        "minFill": 0.3888888888888889,
+        "maxFill": 0.5,
+        "meanDepth": 1.695,
+        "meanOpenRatio": 0.8084761904761905
+      },
+      {
+        "name": "寻路",
+        "number": 4,
+        "samples": 200,
+        "fallbacks": 0,
+        "meanAttempts": 1.16,
+        "meanMs": 0.18941199999999894,
+        "p95Ms": 0.718100000000021,
+        "maxMs": 2.9199000000000126,
+        "minFill": 0.515625,
+        "maxFill": 0.625,
+        "meanDepth": 2.775,
+        "meanOpenRatio": 0.58504884004884
+      },
+      {
+        "name": "交错",
+        "number": 9,
+        "samples": 200,
+        "fallbacks": 0,
+        "meanAttempts": 1.295,
+        "meanMs": 0.27460449999999753,
+        "p95Ms": 0.7010999999999967,
+        "maxMs": 3.084000000000003,
+        "minFill": 0.64,
+        "maxFill": 0.73,
+        "meanDepth": 3.43,
+        "meanOpenRatio": 0.5384531069420773
+      },
+      {
+        "name": "解围",
+        "number": 16,
+        "samples": 200,
+        "fallbacks": 0,
+        "meanAttempts": 1.995,
+        "meanMs": 0.9916050000000013,
+        "p95Ms": 3.364599999999996,
+        "maxMs": 7.429300000000012,
+        "minFill": 0.7013888888888888,
+        "maxFill": 0.8194444444444444,
+        "meanDepth": 4.51,
+        "meanOpenRatio": 0.4627580631947134
+      },
+      {
+        "name": "从容",
+        "number": 21,
+        "samples": 200,
+        "fallbacks": 0,
+        "meanAttempts": 8.13,
+        "meanMs": 4.198544500000004,
+        "p95Ms": 12.130599999999959,
+        "maxMs": 23.613000000000056,
+        "minFill": 0.75,
+        "maxFill": 0.8472222222222222,
+        "meanDepth": 5.375,
+        "meanOpenRatio": 0.4158889046123481
+      }
+    ]
+  },
+  "browser": {
+    "browser": "Edg/152.0.4191.66",
+    "environment": "Windows headless Edge; not a phone or WeChat device",
+    "checks": [
+      "home-start",
+      "snake-and-win",
+      "modal-flow",
+      "lives-and-retry",
+      "reload-recovery",
+      "small-screen",
+      "pixels-and-no-errors",
+      "debug-hidden",
+      "local-performance",
+      "recorded-movement"
+    ],
+    "screenshots": [
+      "home.png",
+      "tutorial.png",
+      "snake-moving.png",
+      "won.png",
+      "pause.png",
+      "challenge.png",
+      "failed.png",
+      "small-challenge.png",
+      "small-pause.png"
+    ],
+    "performance": {
+      "medianMs": 16.69999999999999,
+      "p95Ms": 16.700000000000045,
+      "averageMs": 16.666666666666668,
+      "heapBefore": 988568,
+      "heapAfter": 1104388,
+      "iterations": 200
+    },
+    "video": "snake-and-parallel.webm"
+  },
+  "devices": {
+    "devtools": {
+      "status": "pending",
+      "version": "2.02.2608070",
+      "baseLibrary": null,
+      "compiledAt": null,
+      "evidence": null
+    },
+    "ios": {
+      "status": "pending",
+      "model": "iPhone 15 Pro",
+      "os": null,
+      "wechatVersion": null,
+      "minimumSustainedFps": null,
+      "clickFeedbackMs": null,
+      "evidence": null
+    },
+    "android": {
+      "status": "pending",
+      "model": null,
+      "os": null,
+      "wechatVersion": null,
+      "minimumSustainedFps": null,
+      "clickFeedbackMs": null,
+      "evidence": null
+    },
+    "lowerPerformanceDeviceCovered": false,
+    "tuningConfirmed": false,
+    "note": "用户安排稍后导入；尚无微信编译或手机实测，不以本地浏览器代替。"
+  },
+  "overallPlan": "Local implementation and automation complete; WeChat compilation, real-device verification and tuning remain pending.",
+  "requestedDestination": "F:\\User\\wechat_game\\codex",
+  "destinationCopy": "Not performed: write permission was not granted by the tool."
+}

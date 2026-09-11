@@ -1,0 +1,21 @@
+'use strict';
+function createWechatPlatform(wx, globals) {
+    const { createFeedback } = require('./feedback');
+    const feedback = createFeedback(kind => { if (!wx.createInnerAudioContext)
+        return null; const sound = wx.createInnerAudioContext(); sound.src = 'assets/' + kind + '.wav'; sound.volume = .25; sound.onError?.(() => { }); return sound; }, () => wx.vibrateShort?.({ type: 'light', fail: () => { } }));
+    const canvas = wx.createCanvas();
+    let ctx = canvas.getContext('2d');
+    function info() { const data = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync(); let menu = { bottom: 0 }; try {
+        menu = wx.getMenuButtonBoundingClientRect?.() || menu;
+    }
+    catch { } return { width: data.windowWidth, height: data.windowHeight, ratio: data.pixelRatio || 1, safeTop: data.safeArea?.top || 0, safeBottom: Math.max(0, data.windowHeight - (data.safeArea?.bottom || data.windowHeight)), menuBottom: menu.bottom || 0 }; }
+    function resize() { const i = info(); canvas.width = Math.round(i.width * i.ratio); canvas.height = Math.round(i.height * i.ratio); ctx = canvas.getContext('2d'); ctx.setTransform(i.ratio, 0, 0, i.ratio, 0, 0); return i; }
+    resize();
+    return { canvas, get ctx() { return ctx; }, info, resize, seed: () => Date.now() >>> 0, feedback: (kind, settings) => feedback.play(kind, settings), stopFeedback: () => feedback.stop(), destroy: () => feedback.destroy(), storage: { get: key => wx.getStorageSync(key) || null, set: (key, value) => wx.setStorageSync(key, value) }, requestFrame: fn => globals.requestAnimationFrame(fn), cancelFrame: id => globals.cancelAnimationFrame(id),
+        listen(h) { const p = t => [t.identifier ?? 0, t.clientX ?? t.x, t.clientY ?? t.y]; wx.onTouchStart(e => { for (const t of e.changedTouches || e.touches)
+            h.start(...p(t), e.touches.length); }); wx.onTouchMove(e => { for (const t of e.changedTouches || e.touches)
+            h.move(...p(t), e.touches.length); }); wx.onTouchEnd(e => { for (const t of e.changedTouches)
+            h.end(...p(t)); }); wx.onTouchCancel(() => h.cancel()); wx.onHide(() => h.hide()); wx.onShow(() => h.show()); wx.onWindowResize?.(() => { resize(); h.resize(); }); }
+    };
+}
+module.exports = { createWechatPlatform };

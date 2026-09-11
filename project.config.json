@@ -1,0 +1,37 @@
+{
+  "description": "箭间 · 微信箭头消除小游戏",
+  "projectname": "arrow-garden",
+  "appid": "wx47e5456f2f4f5ade",
+  "compileType": "game",
+  "miniprogramRoot": "dist/wechat/",
+  "setting": {
+    "es6": true,
+    "minified": false,
+    "urlCheck": true,
+    "postcss": false,
+    "compileWorklet": false,
+    "uglifyFileName": false,
+    "uploadWithSourceMap": true,
+    "enhance": false,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "minifyWXSS": true,
+    "minifyWXML": true,
+    "localPlugins": false,
+    "disableUseStrict": false,
+    "useCompilerPlugins": false,
+    "condition": false,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
+  },
+  "simulatorPluginLibVersion": {},
+  "packOptions": {
+    "ignore": [],
+    "include": []
+  },
+  "isGameTourist": false,
+  "editorSetting": {}
+}

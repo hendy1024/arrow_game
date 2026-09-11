@@ -1,0 +1,8 @@
+{
+  "devtools": { "status": "pending", "version": "2.02.2608070", "baseLibrary": null, "compiledAt": null, "evidence": null },
+  "ios": { "status": "pending", "model": "iPhone 15 Pro", "os": null, "wechatVersion": null, "minimumSustainedFps": null, "clickFeedbackMs": null, "evidence": null },
+  "android": { "status": "pending", "model": null, "os": null, "wechatVersion": null, "minimumSustainedFps": null, "clickFeedbackMs": null, "evidence": null },
+  "lowerPerformanceDeviceCovered": false,
+  "tuningConfirmed": false,
+  "note": "用户安排稍后导入；尚无微信编译或手机实测，不以本地浏览器代替。"
+}
