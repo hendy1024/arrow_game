@@ -27,6 +27,7 @@ class Controller {
         this.mode = 'campaign';
         this.campaignSnapshot = null;
         this.challengeUnlockSeen = false;
+        this.raceUnlockSeen = false;
     }
     changed() { this.dirty = true; this.onChange(); }
     say(message, duration = CONFIG.messageMs) { this.message = message; this.messageUntil = this.clock + duration; this.dirty = true; }
@@ -83,12 +84,13 @@ class Controller {
         }
     }
     syncModal() {
-        if (this.mode !== 'challenge' && this.unlocked >= 20 && !this.challengeUnlockSeen) { this.session.pause(); this.modal = 'rush-unlocked'; return; }
+        if (this.mode === 'race') { require('../race/controller').sync(this); return; }
+        if (this.mode === 'campaign' && this.unlocked >= 20 && !this.challengeUnlockSeen) { this.session.pause(); this.modal = 'rush-unlocked'; return; }
         if (this.session.state === 'won')
             this.modal = 'won';
         else if (this.session.state === 'failed' && (!this.session.moves.size || this.session.failureReason === 'timeout'))
             this.modal = 'failed';
-        else if (this.mode !== 'challenge' && this.session.level.lifeLimit !== null && !this.lifeIntroDone) {
+        else if (this.mode === 'campaign' && this.session.level.lifeLimit !== null && !this.lifeIntroDone) {
             this.session.pause();
             this.modal = 'life-intro';
         }
@@ -126,7 +128,11 @@ class Controller {
             else if (event.type === 'removed')
                 this.platform.feedback('removed', this.settings);
             else if (event.type === 'won') {
-                if (this.mode !== 'challenge') this.unlocked = Math.max(this.unlocked, this.session.level.number + 1);
+                if (this.mode === 'campaign') {
+                    const previous = this.unlocked;
+                    this.unlocked = Math.max(this.unlocked, this.session.level.number + 1);
+                    if (previous < 15 && this.unlocked >= 15 && !this.raceUnlockSeen) this.modal = 'race-unlocked';
+                }
                 this.platform.feedback('won', this.settings);
             }
             if (event.type === 'removed' || event.type === 'won' || event.type === 'failed')
@@ -136,6 +142,7 @@ class Controller {
             this.syncModal();
     }
     tick(ms) {
+        require('../race/controller').refreshFriends(this);
         if (this.screen === 'game' && this.session && !this.loading) {
             this.session.tick(ms);
             this.events();
@@ -149,6 +156,8 @@ class Controller {
         }
     }
     action(name) {
+        const raceAction = require('../race/controller').action(this, name);
+        if (raceAction.handled) return raceAction.result;
         if (name === 'rush-notice-close' && ['rush-locked', 'rush-unlocked'].includes(this.modal)) {
             if (this.modal === 'rush-unlocked') this.challengeUnlockSeen = true;
             this.modal = null; if (this.screen === 'game' && this.session) this.syncModal(); this.changed(); return;
@@ -215,7 +224,7 @@ class Controller {
         }
         else if (name === 'vibration' && this.modal === 'settings')
             this.settings.vibration = !this.settings.vibration;
-        else if (name === 'reset-progress-ask' && this.mode !== 'challenge' && (this.modal === 'settings' || this.screen === 'home' && !this.modal) && !this.retryRead) {
+        else if (name === 'reset-progress-ask' && this.mode === 'campaign' && this.screen === 'home' && !this.modal && !this.retryRead) {
             this.resetReturn = this.modal;
             this.modal = 'reset-progress';
         }
@@ -228,6 +237,7 @@ class Controller {
             this.currentLevel = this.unlocked = 1;
             this.tutorialDone = this.lifeIntroDone = false;
             this.challengeUnlockSeen = false;
+            this.raceUnlockSeen = false;
             this.tutorialStep = 0;
             this.loading = this.loadError = false;
             this.screen = 'home';

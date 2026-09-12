@@ -31,11 +31,16 @@ test('P4 取消重置保留棋盘和关卡，确认重置清除主备进度并�
     const a = make(); bindPersistence(a, storage);
     await a.start(9); a.action('life-accept'); a.unlocked = 10; a.settings.sound = false; a.tutorialDone = true;
     a.action('pause'); a.action('settings');
+    const view = new (require('../src/ui/view').View)(a.platform.ctx);
+    view.render(a, a.platform.info());
+    assert.deepEqual(view.buttons.map(b => b.id), ['sound', 'vibration', 'settings-done']);
+    a.action('reset-progress-ask'); assert.equal(a.modal, 'settings');
+    a.action('settings-done'); a.action('home');
     const previous = JSON.stringify(a.session.level);
     a.action('reset-progress-ask');
     assert.equal(a.clickArrow('a0').type, 'locked');
     a.action('reset-progress-cancel');
-    assert.equal(a.modal, 'settings'); assert.equal(a.currentLevel, 9);
+    assert.equal(a.modal, null); assert.equal(a.currentLevel, 9);
     assert.equal(JSON.stringify(a.session.level), previous);
     a.action('reset-progress-ask'); a.action('reset-progress-confirm');
     for (const key of [KEY, BACKUP]) {
@@ -56,6 +61,8 @@ test('P4 首页可重置，未经确认的重置动作无效，保存失败可�
     a.currentLevel = a.unlocked = 8;
     a.action('reset-progress-confirm'); assert.equal(a.currentLevel, 8);
     a.action('settings'); a.action('reset-progress-ask');
+    assert.equal(a.modal, 'settings');
+    a.action('settings-done'); a.action('reset-progress-ask');
     fail = true; a.action('reset-progress-confirm'); assert.equal(a.savedError, true);
     fail = false; a.action('retry-save'); assert.equal(a.savedError, false);
     assert.equal(decode(data.get(KEY)).currentLevel, 1);

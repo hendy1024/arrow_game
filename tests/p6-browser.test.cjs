@@ -130,14 +130,14 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             report.video = 'snake-and-parallel.webm';
             report.checks.push('recorded-movement');
         });
-        await t.test('设置中真实点击取消及确认重置，刷新后从第1关开始', async () => {
+        await t.test('设置不显示重置，主页真实点击取消及确认重置并持久化', async () => {
             await evaluate('__arrowDebug.level(3,51)');
             await until('__arrowDebug.app.currentLevel===3 && !__arrowDebug.app.loading');
             assert.equal(await evaluate('__arrowDebug.app.session.level.width'), 14);
             await capture('level-3-hard');
             await button('pause'); await button('settings');
             await capture('settings-reset');
-            await button('reset-progress-ask'); await button('reset-progress-cancel');
+            assert.deepEqual(await evaluate('__arrowDebug.view.buttons.map(b=>b.id)'), ['sound', 'vibration', 'settings-done']);
             assert.equal(await evaluate('__arrowDebug.app.currentLevel'), 3);
             await button('settings-done'); await button('home');
             await capture('home-reset');

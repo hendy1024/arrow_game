@@ -49,32 +49,37 @@ class View {
     home(app, l) {
         const c = this.ctx, w = l.width, usable = l.bottom - l.top;
         text(c, 'ARROW GARDEN', w / 2, l.top + 22, 11, COLORS.muted, 'center', 500);
-        const titleY = l.top + usable * .16;
+        const titleY = l.top + usable * .12;
         text(c, CONFIG.title, w / 2, titleY, 52, COLORS.ink, 'center', 500);
         text(c, '让每条箭头，找到出口', w / 2, titleY + 43, 14, COLORS.muted, 'center');
-        const size = Math.min(w * .60, usable * .35), x = (w - size) / 2, y = titleY + 78;
+        const size = Math.min(w * .60, usable * .26), x = (w - size) / 2, y = titleY + 78;
         rounded(c, x - 14, y - 12, size + 28, size + 24, 28, '#e9eddf');
         drawBoard(c, fixtures.tutorial, { x, y, width: size, height: size });
-        const by = Math.min(l.bottom - 123, Math.max(y + size + 36, l.top + usable * .73));
+        const by = Math.min(l.bottom - 181, Math.max(y + size + 36, l.top + usable * .73));
         text(c, '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关 · ' + CONFIG.profiles[profileIndex(app.currentLevel)].name, w / 2, by - 24, 13, COLORS.muted, 'center');
         const secondaryWidth = (w - 76) / 2;
         this.button('start', app.session ? '继续闯关' : '开始闯关', 32, by, secondaryWidth, 54, true);
         if (!app.retryRead) this.button('challenge', app.unlocked >= 20 ? '挑战模式' : '挑战 · 20关解锁', 44 + secondaryWidth, by, secondaryWidth, 54);
-        this.button('settings', '设置', 32, by + 68, secondaryWidth, 44);
+        this.button('settings', '设置', 32, by + 126, secondaryWidth, 44);
         if (!app.retryRead)
-            this.button('reset-progress-ask', '重置关卡进度', 44 + secondaryWidth, by + 68, secondaryWidth, 44);
+            this.button('reset-progress-ask', '重置关卡进度', 44 + secondaryWidth, by + 126, secondaryWidth, 44);
+        if (!app.retryRead) this.button('race', app.unlocked >= 15 ? '竞速 · 每日 / 每周' : '竞速 · 15关解锁', 32, by + 66, w - 64, 48);
         if (app.recoveryNotice && !app.savedError)
             text(c, app.recoveryNotice, w / 2, l.bottom + 3, 11, COLORS.red, 'center');
     }
     game(app, l) {
         const c = this.ctx, w = l.width;
         this.button('pause', 'Ⅱ', 16, l.top, 44, 44);
-        text(c, app.mode === 'challenge' ? '挑战模式' : '箭间', w / 2, l.top + 15, 17, COLORS.ink, 'center', 500);
-        text(c, app.mode === 'challenge' ? '20×20 · 4块障碍' : '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
+        text(c, app.mode === 'race' ? '竞速模式' : app.mode === 'challenge' ? '挑战模式' : '箭间', w / 2, l.top + 15, 17, COLORS.ink, 'center', 500);
+        text(c, app.mode === 'race' ? '第 ' + app.currentLevel + ' / 10 关' : app.mode === 'challenge' ? '20×20 · 4块障碍' : '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
         const s = app.session;
-        if (s && s.level.number >= 3 && !app.loading) this.button('items', '道具', 68, l.top, 52, 44);
+        if (app.mode !== 'race' && s && s.level.number >= 3 && !app.loading) this.button('items', '道具', 68, l.top, 52, 44);
         text(c, '剩余箭头', 26, l.top + 80, 12, COLORS.muted);
         text(c, s ? s.remaining : '—', 26, l.top + 108, 27, COLORS.ink, 'left', 500);
+        if (app.mode === 'race' && app.race?.startedAt !== undefined) {
+            text(c, '累计用时', w / 2, l.top + 80, 12, COLORS.muted, 'center');
+            text(c, require('../race/history').format(require('../race/controller').elapsed(app)), w / 2, l.top + 108, 23, COLORS.ink, 'center');
+        }
         if (s?.remainingMs != null) {
             const seconds = Math.ceil(s.remainingMs / 1000);
             text(c, '剩余时间', w / 2, l.top + 80, 12, COLORS.muted, 'center');
@@ -179,7 +184,7 @@ class View {
             case 'settings':
                 title = '设置';
                 description = '按你喜欢的方式，安静地解谜。';
-                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ...(!app.retryRead && app.mode !== 'challenge' ? [['reset-progress-ask', '重置关卡进度']] : []), ['settings-done', '完成', true]];
+                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ['settings-done', '完成', true]];
                 break;
             case 'reset-progress':
                 title = '重置关卡进度？';
@@ -197,10 +202,13 @@ class View {
                 actions = [['challenge-accept', '开始挑战', true]];
                 break;
         }
+        const raceDialog = require('../race/view').dialog(app);
+        if (raceDialog) ({ title, description, actions } = raceDialog);
         const boxWidth = Math.min(w - 40, 340), lines = wrap(c, description, boxWidth - 48), boxHeight = 106 + lines.length * 23 + actions.length * 58 + 12, x = (w - boxWidth) / 2, y = Math.max(l.top, (l.height - boxHeight) / 2);
         rounded(c, x, y, boxWidth, boxHeight, 24, COLORS.paper);
         text(c, title, w / 2, y + 40, 24, COLORS.ink, 'center', 500);
         lines.forEach((line, i) => text(c, line, w / 2, y + 82 + i * 23, 14, COLORS.muted, 'center'));
+        if (app.modal === 'race-friends' && app.platform.drawFriends) app.platform.drawFriends(c, { x: x + 24, y: y + 70, width: boxWidth - 48, height: 180 });
         actions.forEach(([id, label, primary], i) => this.button(id, label, x + 20, y + 102 + lines.length * 23 + i * 58, boxWidth - 40, 48, primary));
     }
     hitButton(x, y) { return this.buttons.find(b => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height)?.id || null; }

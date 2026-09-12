@@ -46,10 +46,10 @@
   ],
   "performance": {
     "medianMs": 16.699999999999932,
-    "p95Ms": 16.700000000000045,
-    "averageMs": 16.666666666666668,
-    "heapBefore": 2341268,
-    "heapAfter": 2748416,
+    "p95Ms": 16.799999999999955,
+    "averageMs": 16.665555555555557,
+    "heapBefore": 2403348,
+    "heapAfter": 2812044,
     "iterations": 200
   },
   "video": "snake-and-parallel.webm"

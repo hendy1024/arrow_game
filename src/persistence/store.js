@@ -9,7 +9,7 @@ function checksum(value) { let n = 2166136261; for (let i = 0; i < value.length;
     n = Math.imul(n, 16777619);
 } return (n >>> 0).toString(16); }
 function snapshot(app) {
-    if (app.mode === 'challenge' && app.campaignSnapshot) return { ...clone(app.campaignSnapshot), settings: { ...app.settings } };
+    if (app.mode !== 'campaign' && app.campaignSnapshot) return { ...clone(app.campaignSnapshot), settings: { ...app.settings } };
     let session = null;
     if (app.session) {
         const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
@@ -19,7 +19,7 @@ function snapshot(app) {
         session.items = { ...s.items };
         session.restartLevel = clone(s.restartLevel);
     }
-    return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, session };
+    return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
 }
 function validProgress(p) { return Number.isInteger(p) && p >= 1 && p < 1000000; }
 function validate(data) {
@@ -92,6 +92,7 @@ function restore(app, data) {
         app[key] = data[key];
     app.settings = { ...data.settings };
     app.challengeUnlockSeen = !!data.challengeUnlockSeen;
+    app.raceUnlockSeen = !!data.raceUnlockSeen;
     app.session = null;
     if (data.session) {
         const state = data.session;

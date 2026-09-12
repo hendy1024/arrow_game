@@ -106,4 +106,4 @@ function generateAsync(number, seed, { schedule = fn => setTimeout(fn, 0), ...op
         reject(e);
     } } step(); });
 }
-module.exports = { generate, generateSteps, generateAsync, acceptable };
+module.exports = { generate, generateSteps, generateAsync, acceptable, candidate };

@@ -25,7 +25,7 @@ function mount(platform, options = {}) {
                 return;
             app.clickArrow(hitArrow(app.session.level, t.toBoard(p), app.session.removed, app.session.paths()));
             render();
-        } }, cancel: () => { pointer.cancel(); drag = null; }, hide: () => { hidden = true; pointer.cancel(); drag = null; platform.cancelFrame(frameId); last = null; if (app.session)
+        } }, cancel: () => { pointer.cancel(); drag = null; }, hide: () => { hidden = true; pointer.cancel(); drag = null; platform.cancelFrame(frameId); last = null; if (app.session && app.mode !== 'race')
             for (const id of [...app.session.moves.keys()])
                 app.session.complete(id); app.events(); app.session?.pause(); app.persist?.(); platform.stopFeedback?.(); }, show: () => { if (!hidden)
             return; hidden = false; last = null; if (app.session?.state === 'paused' && !app.modal)

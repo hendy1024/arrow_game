@@ -23,6 +23,8 @@ function build() {
     require('./audio.cjs').buildAudio();
     for (const target of ['wechat', 'preview'])
         fs.mkdirSync(path.join(root, 'dist', target), { recursive: true });
+    fs.mkdirSync(path.join(root, 'dist/wechat/open-data'), { recursive: true });
+    fs.copyFileSync(path.join(root, 'src/open-data/index.js'), path.join(root, 'dist/wechat/open-data/index.js'));
     fs.writeFileSync(path.join(root, 'dist/wechat/game.js'), bundle('src/main-wechat.js'));
     fs.copyFileSync(path.join(root, 'game.json'), path.join(root, 'dist/wechat/game.json'));
     fs.writeFileSync(path.join(root, 'dist/preview/game.js'), bundle('src/main-browser.js'));
