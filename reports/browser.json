@@ -8,10 +8,13 @@
     "lives-and-retry",
     "reload-recovery",
     "small-screen",
+    "zoom-pan-hit",
     "pixels-and-no-errors",
     "debug-hidden",
     "local-performance",
-    "recorded-movement"
+    "recorded-movement",
+    "reset-progress-persistence",
+    "timer-pause-timeout-retry"
   ],
   "screenshots": [
     "home.png",
@@ -22,14 +25,23 @@
     "challenge.png",
     "failed.png",
     "small-challenge.png",
-    "small-pause.png"
+    "small-pause.png",
+    "zoomed-board.png",
+    "level-18-overview.png",
+    "level-3-hard.png",
+    "settings-reset.png",
+    "home-reset.png",
+    "reset-confirm.png",
+    "timer-intro.png",
+    "obstacles-timer.png",
+    "timeout-failed.png"
   ],
   "performance": {
     "medianMs": 16.69999999999999,
     "p95Ms": 16.700000000000045,
-    "averageMs": 16.666666666666668,
-    "heapBefore": 988568,
-    "heapAfter": 1104388,
+    "averageMs": 17.036666666666665,
+    "heapBefore": 2507556,
+    "heapAfter": 1754152,
     "iterations": 200
   },
   "video": "snake-and-parallel.webm"

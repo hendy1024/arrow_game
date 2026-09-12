@@ -15,6 +15,8 @@ class Session {
         this.state = 'playing';
         this.time = 0;
         this.events = [];
+        this.remainingMs = level.timeLimitMs ?? null;
+        this.failureReason = null;
     }
     get remaining() { return this.level.arrows.length - this.removed.size; }
     emit(type, data = {}) { this.events.push({ type, ...data }); }
@@ -58,6 +60,7 @@ class Session {
             this.emit('blocked', { id, blocker: result.blocker, lives: this.lives });
             if (this.lives === 0) {
                 this.state = 'failed';
+                this.failureReason = 'lives';
                 this.emit('failed');
             }
         }
@@ -84,6 +87,16 @@ class Session {
             return;
         if (!Number.isFinite(ms) || ms < 0)
             throw new Error('Invalid elapsed time');
+        if (this.state === 'playing' && this.remainingMs !== null) {
+            if (this.moves.size === this.remaining && this.remaining > 0) {
+                const finish = Math.max(...[...this.moves].map(([id, move]) => Math.max(0, completionDistance(this.level.arrows.find(a => a.id === id), this.level) * 1000 / CONFIG.speed - move.elapsedMs)));
+                if (finish < this.remainingMs && finish <= ms) ms = finish;
+            }
+            const elapsed = Math.min(ms, this.remainingMs);
+            this.remainingMs -= elapsed;
+            ms = elapsed;
+            if (this.remainingMs === 0) { this.state = 'failed'; this.failureReason = 'timeout'; this.emit('failed', { reason: 'timeout' }); }
+        }
         this.time += ms;
         for (const [id, f] of this.feedback)
             if (f.until <= this.time)

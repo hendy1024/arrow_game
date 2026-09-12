@@ -74,11 +74,14 @@ class Controller {
         }
         else
             this.modal = null;
+        if (!this.modal && [15, 20].includes(this.session.level.number)) {
+            this.session.pause(); this.modal = 'challenge-intro';
+        }
     }
     syncModal() {
         if (this.session.state === 'won')
             this.modal = 'won';
-        else if (this.session.state === 'failed' && !this.session.moves.size)
+        else if (this.session.state === 'failed' && (!this.session.moves.size || this.session.failureReason === 'timeout'))
             this.modal = 'failed';
         else if (this.session.level.lifeLimit !== null && !this.lifeIntroDone) {
             this.session.pause();
@@ -175,6 +178,24 @@ class Controller {
         }
         else if (name === 'vibration' && this.modal === 'settings')
             this.settings.vibration = !this.settings.vibration;
+        else if (name === 'reset-progress-ask' && (this.modal === 'settings' || this.screen === 'home' && !this.modal) && !this.retryRead) {
+            this.resetReturn = this.modal;
+            this.modal = 'reset-progress';
+        }
+        else if (name === 'reset-progress-cancel' && this.modal === 'reset-progress')
+            this.modal = this.resetReturn || null;
+        else if (name === 'reset-progress-confirm' && this.modal === 'reset-progress') {
+            this.token++;
+            this.platform.stopFeedback?.();
+            this.session = null;
+            this.currentLevel = this.unlocked = 1;
+            this.tutorialDone = this.lifeIntroDone = false;
+            this.tutorialStep = 0;
+            this.loading = this.loadError = false;
+            this.screen = 'home';
+            this.modal = this.settingsReturn = null;
+            this.say('关卡进度已重置，从第 1 关重新开始');
+        }
         else if (name === 'restart-ask' && this.modal === 'pause')
             this.modal = 'restart';
         else if (name === 'restart-cancel' && this.modal === 'restart') {
@@ -188,6 +209,10 @@ class Controller {
         }
         else if (name === 'life-accept' && this.modal === 'life-intro') {
             this.lifeIntroDone = true;
+            this.modal = null;
+            this.session.resume();
+        }
+        else if (name === 'challenge-accept' && this.modal === 'challenge-intro') {
             this.modal = null;
             this.session.resume();
         }

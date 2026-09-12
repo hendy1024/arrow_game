@@ -30,7 +30,7 @@ async function launch() {
         return;
     } res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.wav') ? 'audio/wav' : 'text/html; charset=utf-8'); res.end(b); }); });
     await new Promise(r => server.listen(0, '127.0.0.1', r));
-    const profile = path.resolve(root, '../../work/browser-' + process.pid);
+    const profile = path.resolve(root, 'work/browser-' + process.pid);
     fs.mkdirSync(profile, { recursive: true });
     const exe = process.env.EDGE_PATH || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
     const child = spawn(exe, ['--headless', '--disable-gpu', '--in-process-gpu', '--no-sandbox', '--disable-features=RendererCodeIntegrity', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--remote-debugging-port=0', '--user-data-dir=' + profile, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });

@@ -1,3 +1,7 @@
 node_modules/
 project.private.config.json
-reports/*.log
+work/
+dist/
+reports/
+*.log
+.DS_Store

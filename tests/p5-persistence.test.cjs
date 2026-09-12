@@ -6,6 +6,35 @@ const { fakePlatform, fakeWx } = require('./helpers.cjs');
 const { snapshot, restore, createStore, bindPersistence, KEY, BACKUP, encode } = require('../src/persistence/store');
 function app(level = fixtures.tutorial) { const a = new Controller(fakePlatform()); a.session = new Session(level); a.currentLevel = level.number; a.screen = 'game'; return a; }
 function memory() { const data = new Map(); return { data, get: k => data.get(k), set: (k, v) => data.set(k, v) }; }
+
+test('P5 限时关切后台保存精确剩余时间，后台及回前台不补算时间', () => {
+    const platform = fakePlatform(); platform.storage = memory(); platform.cancelFrame = () => {};
+    const game = require('../src/runtime').mount(platform);
+    game.app.session = new Session({ ...fixtures.tutorial, timeLimitMs: 180000 });
+    game.app.screen = 'game'; game.app.session.tick(1234);
+    platform.callbacks.hide();
+    game.app.tick(50000); assert.equal(game.app.session.remainingMs, 178766);
+    const saved = createStore(platform.storage).load().data;
+    assert.equal(saved.session.remainingMs, 178766);
+    platform.callbacks.show(); assert.equal(game.app.session.remainingMs, 178766);
+    game.app.tick(100); assert.equal(game.app.session.remainingMs, 178666);
+    game.stop();
+});
+
+test('P5 旧第3关无限次数存档迁移为3次，保留布局进度且重载不补回次数', async () => {
+    const old = app({ ...fixtures.tutorial, number: 3, lifeLimit: null });
+    old.session.removed.add('third');
+    const storage = memory(); createStore(storage).save(snapshot(old));
+    const a = new Controller(fakePlatform()); bindPersistence(a, storage);
+    assert.equal(a.session.lives, 3);
+    assert.deepEqual(a.session.level.arrows, old.session.level.arrows);
+    assert.ok(a.session.removed.has('third'));
+    await a.action('start'); assert.equal(a.modal, 'life-intro'); a.action('life-accept');
+    a.clickArrow('second'); assert.equal(a.session.lives, 2);
+    const b = new Controller(fakePlatform()); bindPersistence(b, storage);
+    assert.equal(b.session.lives, 2);
+    assert.equal(b.session.level.lifeLimit, 3);
+});
 test('P5 动画中快照完成已接受移动，前台仍按动画计数', () => { const a = app(); a.session.click('first'); a.session.tick(20); const saved = snapshot(a); assert.equal(a.session.remaining, 3); assert.deepEqual(saved.session.removed, ['first']); const b = app(); restore(b, saved); assert.equal(b.session.remaining, 2); assert.equal(b.session.moves.size, 0); });
 test('P5 多箭头同时中断恢复完整稳定状态', () => { const a = app(); a.session.click('first'); a.session.click('third'); const b = app(); restore(b, snapshot(a)); assert.equal(b.session.remaining, 1); assert.deepEqual([...b.session.removed], ['first', 'third']); });
 test('P5 最后一条动画中断恢复通关且只解锁下一关', () => { const a = app(fixtures.boundary); a.session.click('a'); const saved = snapshot(a); assert.equal(saved.session.state, 'won'); assert.equal(saved.unlocked, 2); const b = app(); restore(b, saved); assert.equal(b.session.state, 'won'); });

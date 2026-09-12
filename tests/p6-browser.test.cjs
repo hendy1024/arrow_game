@@ -39,7 +39,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
         });
         await t.test('暂停、设置、重新开始确认按真实点击完成', async () => { await button('pause'); assert.equal(await evaluate('__arrowDebug.app.session.state'), 'paused'); await capture('pause'); await button('settings'); await button('sound'); assert.equal(await evaluate('__arrowDebug.app.settings.sound'), false); await button('settings-done'); await button('restart-ask'); await button('restart-cancel'); assert.equal(await evaluate('__arrowDebug.app.session.state'), 'playing'); report.checks.push('modal-flow'); });
         await t.test('挑战关真实点击扣生命、失败、相同布局重试', async () => {
-            await evaluate('__arrowDebug.level(21,51)');
+            await evaluate('__arrowDebug.level(3,51)');
             await button('life-accept');
             await capture('challenge');
             const before = await evaluate('JSON.stringify(__arrowDebug.app.session.level.arrows)'), id = await evaluate('__arrowDebug.app.session.level.arrows.find(a=>__arrowDebug.app.session.classify(a.id).type==="blocked").id');
@@ -69,6 +69,25 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             report.checks.push('reload-recovery');
         });
         await t.test('320×568 小屏真实画布与弹窗按钮均在视口内', async () => { await c.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 568, deviceScaleFactor: 1, mobile: true }, s); await delay(150); await capture('small-challenge'); await button('pause'); await capture('small-pause'); assert.equal(await evaluate('__arrowDebug.view.buttons.every(b=>b.x>=0&&b.y>=0&&b.x+b.width<=320&&b.y+b.height<=568)'), true); await button('resume'); report.checks.push('small-screen'); });
+        await t.test('最大棋盘真实放大拖动无误触，点击可见箭头有效', async () => {
+            await evaluate('__arrowDebug.level(18,51)');
+            await button('zoom-in'); await button('zoom-in');
+            assert.equal(await evaluate('__arrowDebug.view.camera.zoom'), 3);
+            const r = await evaluate('__arrowDebug.view.camera.rect');
+            const x = r.x + r.width / 2, y = r.y + r.height / 2;
+            await c.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, s);
+            await c.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x + 40, y: y + 40, button: 'left', buttons: 1 }, s);
+            await c.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x + 40, y: y + 40, button: 'left', clickCount: 1 }, s);
+            assert.equal(await evaluate('__arrowDebug.app.session.lives'), 3);
+            assert.equal(await evaluate('__arrowDebug.app.session.removed.size'), 0);
+            const id = await evaluate(`(()=>{const g=__arrowDebug,a=g.app.session.level.arrows.find(a=>g.app.session.classify(a.id).type==='allowed'),p=g.view.transform.toScreen(a.path.at(-1)),r=g.view.camera.rect;g.view.camera.pan(r.x+r.width/2-p[0],r.y+r.height/2-p[1]);g.render();return a.id;})()`);
+            await capture('zoomed-board'); await arrow(id);
+            await until(`__arrowDebug.app.session.removed.has(${JSON.stringify(id)})`);
+            assert.equal(await evaluate('__arrowDebug.app.session.lives'), 3);
+            await button('zoom-reset'); assert.equal(await evaluate('__arrowDebug.view.camera.zoom'), 1);
+            await capture('level-18-overview');
+            report.checks.push('zoom-pan-hit');
+        });
         await t.test('画布确有非空像素，交互期间无脚本异常', async () => { const stats = await evaluate(`(()=>{const d=document.querySelector('canvas').getContext('2d').getImageData(0,0,320,568).data;let ink=0;for(let i=0;i<d.length;i+=4)if(d[i]<100&&d[i+1]<150&&d[i+2]<140)ink++;return {ink};})()`); assert.ok(stats.ink > 1000); const errors = c.events.filter(e => e.method === 'Runtime.exceptionThrown'); assert.deepEqual(errors, []); report.checks.push('pixels-and-no-errors'); });
         await t.test('普通预览不暴露调试对象', async () => { await c.send('Page.navigate', { url: b.url + '/' }, s); await until('document.readyState==="complete"'); assert.equal(await evaluate('typeof window.__arrowDebug'), 'undefined'); report.checks.push('debug-hidden'); });
         await t.test('高密度真实画布帧率和反复重建内存采样', async () => {
@@ -111,9 +130,51 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             report.video = 'snake-and-parallel.webm';
             report.checks.push('recorded-movement');
         });
+        await t.test('设置中真实点击取消及确认重置，刷新后从第1关开始', async () => {
+            await evaluate('__arrowDebug.level(3,51)');
+            await until('__arrowDebug.app.currentLevel===3 && !__arrowDebug.app.loading');
+            assert.equal(await evaluate('__arrowDebug.app.session.level.width'), 14);
+            await capture('level-3-hard');
+            await button('pause'); await button('settings');
+            await capture('settings-reset');
+            await button('reset-progress-ask'); await button('reset-progress-cancel');
+            assert.equal(await evaluate('__arrowDebug.app.currentLevel'), 3);
+            await button('settings-done'); await button('home');
+            await capture('home-reset');
+            await button('reset-progress-ask'); await button('reset-progress-cancel');
+            assert.equal(await evaluate('__arrowDebug.app.modal'), null);
+            assert.equal(await evaluate('__arrowDebug.app.currentLevel'), 3);
+            await button('reset-progress-ask'); await capture('reset-confirm');
+            await button('reset-progress-confirm');
+            assert.equal(await evaluate('__arrowDebug.app.currentLevel'), 1);
+            await c.send('Page.reload', {}, s); await until('!!window.__arrowDebug');
+            assert.equal(await evaluate('__arrowDebug.app.currentLevel'), 1);
+            assert.equal(await evaluate('__arrowDebug.app.unlocked'), 1);
+            await button('start'); await until('__arrowDebug.app.tutorialStep===1');
+            report.checks.push('reset-progress-persistence');
+        });
+        await t.test('限时说明与暂停冻结，真实超时失败及重试恢复', async () => {
+            await evaluate('__arrowDebug.app.lifeIntroDone=true; __arrowDebug.level(20,51)');
+            assert.equal(await evaluate('__arrowDebug.app.modal'), 'challenge-intro');
+            await delay(150); assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'), 180000);
+            await capture('timer-intro'); await button('challenge-accept');
+            await delay(150); await button('pause');
+            const remaining = await evaluate('__arrowDebug.app.session.remainingMs');
+            await delay(200); assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'), remaining);
+            await button('resume'); await capture('obstacles-timer');
+            await evaluate('__arrowDebug.app.session.remainingMs=100');
+            await until('__arrowDebug.app.modal==="failed"');
+            assert.equal(await evaluate('__arrowDebug.app.session.failureReason'), 'timeout');
+            await capture('timeout-failed'); await button('restart');
+            assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'), 180000);
+            assert.equal(await evaluate('__arrowDebug.app.session.lives'), 3);
+            report.checks.push('timer-pause-timeout-retry');
+        });
     }
     finally {
         fs.writeFileSync('reports/browser.json', JSON.stringify(report, null, 2));
         await b.close();
     }
 });
+
+

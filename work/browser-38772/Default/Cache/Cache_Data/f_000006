@@ -1,0 +1,2954 @@
+(function(){'use strict';const modules={"src/main-browser.js":function(module,exports,require){
+'use strict';
+const { createBrowserPlatform } = require("src/platform/browser.js");
+const { mount } = require("src/runtime.js");
+const game = mount(createBrowserPlatform(document.querySelector('canvas'), window));
+if (new URLSearchParams(location.search).has('debug')) {
+    const { Session } = require("src/domain/session.js"), { fixtures } = require("src/fixtures.js"), { generate } = require("src/generation/generator.js"), { solve } = require("src/generation/validate.js");
+    window.__arrowDebug = {
+        ...game,
+        solve,
+        fixture(name) {
+            game.app.session = new Session(fixtures[name]);
+            game.app.currentLevel = game.app.session.level.number;
+            game.app.screen = 'game';
+            game.app.modal = null;
+            game.app.message = '';
+            game.app.tutorialStep = 0;
+            game.render();
+        },
+        level(number, seed = 51) {
+            game.app.session = new Session(generate(number, seed).level);
+            game.app.currentLevel = number;
+            game.app.screen = 'game';
+            game.app.message = '';
+            game.app.configureIntro();
+            game.render();
+        },
+        grid() {
+            game.app.debugGrid = !game.app.debugGrid;
+            game.render();
+        }
+    };
+}
+
+},
+"src/platform/browser.js":function(module,exports,require){
+'use strict';
+function createBrowserPlatform(canvas, win) {
+    const { createFeedback } = require("src/platform/feedback.js");
+    const feedback = createFeedback(kind => { const a = new win.Audio('assets/' + kind + '.wav'); a.volume = .25; return { play: () => a.play(), stop() { a.pause(); a.currentTime = 0; }, destroy() { a.pause(); a.src = ''; } }; }, () => win.navigator.vibrate?.(10));
+    const doc = win.document;
+    let ctx = canvas.getContext('2d');
+    function info() { const r = canvas.getBoundingClientRect(); return { width: r.width, height: r.height, ratio: win.devicePixelRatio || 1, safeTop: 12, safeBottom: 12, menuBottom: 0 }; }
+    function resize() { const i = info(); canvas.width = Math.round(i.width * i.ratio); canvas.height = Math.round(i.height * i.ratio); ctx = canvas.getContext('2d'); ctx.setTransform(i.ratio, 0, 0, i.ratio, 0, 0); return i; }
+    resize();
+    return { canvas, get ctx() { return ctx; }, info, resize, seed: () => Date.now() >>> 0, feedback: (kind, settings) => feedback.play(kind, settings), stopFeedback: () => feedback.stop(), destroy: () => feedback.destroy(), storage: { get: key => win.localStorage.getItem(key), set: (key, value) => win.localStorage.setItem(key, value) }, requestFrame: fn => win.requestAnimationFrame(fn), cancelFrame: id => win.cancelAnimationFrame(id),
+        listen(h) { const active = new Set(); const p = e => { const r = canvas.getBoundingClientRect(); return [e.pointerId, e.clientX - r.left, e.clientY - r.top]; }; canvas.addEventListener('pointerdown', e => { active.add(e.pointerId); canvas.setPointerCapture(e.pointerId); h.start(...p(e), active.size); }); canvas.addEventListener('pointermove', e => h.move(...p(e), active.size || 1)); canvas.addEventListener('pointerup', e => { h.end(...p(e)); active.delete(e.pointerId); }); canvas.addEventListener('pointercancel', () => { active.clear(); h.cancel(); }); doc.addEventListener('visibilitychange', () => doc.hidden ? h.hide() : h.show()); win.addEventListener('pagehide', () => h.hide()); win.addEventListener('resize', () => { resize(); h.resize(); }); }
+    };
+}
+module.exports = { createBrowserPlatform };
+
+},
+"src/platform/feedback.js":function(module,exports,require){
+'use strict';
+function createFeedback(createAudio, vibrate) {
+    const sounds = new Map();
+    return { play(kind, settings) {
+            if (settings.vibration)
+                try {
+                    vibrate();
+                }
+                catch { }
+            if (!settings.sound)
+                return;
+            try {
+                let sound = sounds.get(kind);
+                if (!sound) {
+                    sound = createAudio(kind);
+                    if (!sound)
+                        return;
+                    sounds.set(kind, sound);
+                }
+                sound.stop?.();
+                const result = sound.play();
+                result?.catch?.(() => { });
+            }
+            catch { }
+        }, stop() { for (const sound of sounds.values())
+            try {
+                sound.stop?.();
+            }
+            catch { } }, destroy() { for (const sound of sounds.values())
+            try {
+                sound.destroy?.();
+            }
+            catch { } sounds.clear(); } };
+}
+module.exports = { createFeedback };
+
+},
+"src/runtime.js":function(module,exports,require){
+'use strict';
+const { Controller } = require("src/ui/controller.js");
+const { View } = require("src/ui/view.js");
+const { Pointer, hitArrow } = require("src/input/pointer.js");
+const { bindPersistence } = require("src/persistence/store.js");
+function mount(platform, options = {}) {
+    const app = new Controller(platform, options), view = new View(platform.ctx), pointer = new Pointer();
+    let frameId = null, last = null, hidden = false;
+    if (platform.storage)
+        bindPersistence(app, platform.storage);
+    function render() { view.ctx = platform.ctx; view.render(app, platform.info()); }
+    function frame(now) { if (hidden)
+        return; const delta = last === null ? 0 : Math.max(0, now - last); last = now; app.tick(delta); render(); frameId = platform.requestFrame(frame); }
+    platform.listen({ start: (...args) => pointer.start(...args), move: (...args) => pointer.move(...args), end: (...args) => { const p = pointer.end(...args); if (!p)
+            return; const button = view.hitButton(...p); if (button) {
+            app.action(button);
+            render();
+            return;
+        } if (view.transform && !app.modal) {
+            const t = view.transform;
+            if (p[0] < t.x || p[1] < t.y || p[0] > t.x + t.width || p[1] > t.y + t.height)
+                return;
+            app.clickArrow(hitArrow(app.session.level, t.toBoard(p), app.session.removed, app.session.paths()));
+            render();
+        } }, cancel: () => pointer.cancel(), hide: () => { hidden = true; pointer.cancel(); platform.cancelFrame(frameId); last = null; if (app.session)
+            for (const id of [...app.session.moves.keys()])
+                app.session.complete(id); app.events(); app.session?.pause(); app.persist?.(); platform.stopFeedback?.(); }, show: () => { if (!hidden)
+            return; hidden = false; last = null; if (app.session?.state === 'paused' && !app.modal)
+            app.session.resume(); frameId = platform.requestFrame(frame); }, resize: () => { pointer.cancel(); render(); } });
+    render();
+    frameId = platform.requestFrame(frame);
+    return { app, view, render, stop() { hidden = true; platform.cancelFrame(frameId); platform.destroy?.(); } };
+}
+module.exports = { mount };
+
+},
+"src/ui/controller.js":function(module,exports,require){
+'use strict';
+const { Session } = require("src/domain/session.js");
+const { generateAsync } = require("src/generation/generator.js");
+const { CONFIG, lifeLimit } = require("src/config.js");
+class Controller {
+    constructor(platform, options = {}) {
+        this.platform = platform;
+        this.generate = options.generate || generateAsync;
+        this.screen = 'home';
+        this.modal = null;
+        this.session = null;
+        this.currentLevel = 1;
+        this.unlocked = 1;
+        this.settings = { sound: true, vibration: true };
+        this.tutorialDone = false;
+        this.lifeIntroDone = false;
+        this.tutorialStep = 0;
+        this.message = '';
+        this.messageUntil = 0;
+        this.clock = 0;
+        this.loading = false;
+        this.loadError = false;
+        this.token = 0;
+        this.onChange = () => { };
+        this.dirty = true;
+        this.savedError = false;
+    }
+    changed() { this.dirty = true; this.onChange(); }
+    say(message, duration = CONFIG.messageMs) { this.message = message; this.messageUntil = this.clock + duration; this.dirty = true; }
+    async start(number = this.currentLevel) {
+        if (this.loading)
+            return;
+        if (this.session && this.session.level.number === number) {
+            this.screen = 'game';
+            this.session.resume();
+            this.syncModal();
+            this.changed();
+            return;
+        }
+        const token = ++this.token;
+        this.loading = true;
+        this.loadError = false;
+        this.screen = 'game';
+        this.modal = null;
+        this.message = '';
+        this.changed();
+        try {
+            const result = await this.generate(number, this.platform.seed());
+            if (token !== this.token)
+                return;
+            this.session = new Session(result.level);
+            this.currentLevel = number;
+            this.loading = false;
+            this.configureIntro();
+            this.changed();
+        }
+        catch (e) {
+            if (token !== this.token)
+                return;
+            this.loading = false;
+            this.loadError = true;
+            this.say('棋盘准备失败，请重试', 60000);
+            this.changed();
+        }
+    }
+    configureIntro() {
+        if (this.session.level.number === 1 && !this.tutorialDone)
+            this.tutorialStep = 1;
+        else
+            this.tutorialStep = 0;
+        if (lifeLimit(this.session.level.number) !== null && !this.lifeIntroDone) {
+            this.session.pause();
+            this.modal = 'life-intro';
+        }
+        else
+            this.modal = null;
+    }
+    syncModal() {
+        if (this.session.state === 'won')
+            this.modal = 'won';
+        else if (this.session.state === 'failed' && !this.session.moves.size)
+            this.modal = 'failed';
+        else if (this.session.level.lifeLimit !== null && !this.lifeIntroDone) {
+            this.session.pause();
+            this.modal = 'life-intro';
+        }
+        else
+            this.modal = null;
+    }
+    clickArrow(id) {
+        if (this.screen !== 'game' || this.modal || this.loading || !this.session)
+            return { type: 'locked' };
+        if (this.tutorialStep === 1 && id !== 'first') {
+            this.say('先点击标记的箭头，试着移走它');
+            return { type: 'tutorial' };
+        }
+        const result = this.session.click(id);
+        if (result.type === 'temporary')
+            this.say('通道正在腾空，请稍候');
+        if (result.type === 'allowed' && this.tutorialStep === 1) {
+            this.tutorialStep = 2;
+            this.tutorialDone = true;
+            this.say('先移走外面的箭头，给里面让路', 4500);
+        }
+        this.events();
+        if (result.type === 'allowed' || result.type === 'blocked')
+            this.changed();
+        return result;
+    }
+    events() {
+        if (!this.session)
+            return;
+        for (const event of this.session.drainEvents()) {
+            if (event.type === 'blocked') {
+                this.say(this.session.lives === null ? '前方有阻挡' : '前方有阻挡，机会 −1');
+                this.platform.feedback('blocked', this.settings);
+            }
+            else if (event.type === 'removed')
+                this.platform.feedback('removed', this.settings);
+            else if (event.type === 'won') {
+                this.unlocked = Math.max(this.unlocked, this.session.level.number + 1);
+                this.platform.feedback('won', this.settings);
+            }
+            if (event.type === 'removed' || event.type === 'won' || event.type === 'failed')
+                this.changed();
+        }
+        if (!this.modal || this.modal === 'won' || this.modal === 'failed')
+            this.syncModal();
+    }
+    tick(ms) {
+        if (this.screen === 'game' && this.session && !this.loading) {
+            this.session.tick(ms);
+            this.events();
+        }
+        this.clock += ms;
+        if (this.message && this.clock >= this.messageUntil) {
+            this.message = '';
+            if (this.tutorialStep === 2)
+                this.tutorialStep = 0;
+            this.dirty = true;
+        }
+    }
+    action(name) {
+        if (name === 'retry-save') {
+            if (this.retryRead)
+                this.retryRead();
+            else
+                this.persist?.();
+            return;
+        }
+        if (name === 'retry-load' && this.loadError) {
+            this.session = null;
+            return this.start();
+        }
+        if (name === 'start' && this.screen === 'home' && !this.modal)
+            return this.start();
+        if (name === 'pause' && this.screen === 'game' && !this.modal && !this.loading && this.session?.state === 'playing') {
+            this.session.pause();
+            this.modal = 'pause';
+        }
+        else if (name === 'resume' && this.modal === 'pause') {
+            this.modal = null;
+            this.session.resume();
+        }
+        else if (name === 'settings' && (this.screen === 'home' && !this.modal || this.modal === 'pause')) {
+            this.settingsReturn = this.modal;
+            this.modal = 'settings';
+        }
+        else if (name === 'settings-done' && this.modal === 'settings')
+            this.modal = this.settingsReturn || null;
+        else if (name === 'sound' && this.modal === 'settings') {
+            this.settings.sound = !this.settings.sound;
+            if (!this.settings.sound)
+                this.platform.stopFeedback?.();
+        }
+        else if (name === 'vibration' && this.modal === 'settings')
+            this.settings.vibration = !this.settings.vibration;
+        else if (name === 'reset-progress-ask' && this.modal === 'settings' && !this.retryRead)
+            this.modal = 'reset-progress';
+        else if (name === 'reset-progress-cancel' && this.modal === 'reset-progress')
+            this.modal = 'settings';
+        else if (name === 'reset-progress-confirm' && this.modal === 'reset-progress') {
+            this.token++;
+            this.platform.stopFeedback?.();
+            this.session = null;
+            this.currentLevel = this.unlocked = 1;
+            this.tutorialDone = this.lifeIntroDone = false;
+            this.tutorialStep = 0;
+            this.loading = this.loadError = false;
+            this.screen = 'home';
+            this.modal = this.settingsReturn = null;
+            this.say('关卡进度已重置，从第 1 关重新开始');
+        }
+        else if (name === 'restart-ask' && this.modal === 'pause')
+            this.modal = 'restart';
+        else if (name === 'restart-cancel' && this.modal === 'restart') {
+            this.modal = null;
+            this.session.resume();
+        }
+        else if (name === 'restart' && (this.modal === 'restart' || this.modal === 'failed')) {
+            this.session = this.session.restart();
+            this.message = '';
+            this.configureIntro();
+        }
+        else if (name === 'life-accept' && this.modal === 'life-intro') {
+            this.lifeIntroDone = true;
+            this.modal = null;
+            this.session.resume();
+        }
+        else if (name === 'next' && this.modal === 'won') {
+            const number = this.session.level.number + 1;
+            this.session = null;
+            this.currentLevel = number;
+            return this.start(number);
+        }
+        else if (name === 'home' && (this.modal === 'pause' || this.modal === 'won' || this.modal === 'failed' || this.loadError)) {
+            this.session?.pause();
+            this.screen = 'home';
+            this.modal = null;
+            this.loading = false;
+            this.loadError = false;
+        }
+        this.changed();
+    }
+}
+module.exports = { Controller };
+
+},
+"src/domain/session.js":function(module,exports,require){
+'use strict';
+const { validateLevel, clone, occupancy, firstBlocker, exitCells, key } = require("src/domain/board.js");
+const { bodyAt, completionDistance, occupiedByBody } = require("src/movement/path.js");
+const { CONFIG } = require("src/config.js");
+class Session {
+    constructor(level) {
+        const result = validateLevel(level);
+        if (!result.valid)
+            throw new Error('Invalid level: ' + result.errors.join(','));
+        this.level = clone(level);
+        this.removed = new Set();
+        this.moves = new Map();
+        this.feedback = new Map();
+        this.lives = level.lifeLimit;
+        this.state = 'playing';
+        this.time = 0;
+        this.events = [];
+    }
+    get remaining() { return this.level.arrows.length - this.removed.size; }
+    emit(type, data = {}) { this.events.push({ type, ...data }); }
+    drainEvents() { const events = this.events; this.events = []; return events; }
+    classify(id) {
+        if (this.state !== 'playing')
+            return { type: 'locked' };
+        if (!id || this.removed.has(id))
+            return { type: 'empty' };
+        const arrow = this.level.arrows.find(a => a.id === id);
+        if (!arrow)
+            return { type: 'empty' };
+        if (this.moves.has(id))
+            return { type: 'moving' };
+        if ((this.feedback.get(id)?.until || 0) > this.time)
+            return { type: 'feedback' };
+        const excluded = new Set([...this.removed, ...this.moves.keys()]);
+        const occupied = occupancy(this.level, excluded);
+        for (const [movingId, move] of this.moves) {
+            const movingArrow = this.level.arrows.find(a => a.id === movingId);
+            for (const cell of occupiedByBody(movingArrow, move.distance, this.level))
+                occupied.set(cell, movingId);
+        }
+        const blocker = firstBlocker(arrow, this.level, occupied);
+        if (blocker)
+            return { type: this.moves.has(blocker.id) ? 'temporary' : 'blocked', blocker, arrow };
+        const ray = new Set(exitCells(arrow, this.level).map(key));
+        for (const movingId of this.moves.keys()) {
+            const other = this.level.arrows.find(a => a.id === movingId);
+            if (exitCells(other, this.level).some(p => ray.has(key(p))))
+                return { type: 'temporary', arrow };
+        }
+        return { type: 'allowed', arrow };
+    }
+    click(id) {
+        const result = this.classify(id);
+        if (result.type === 'blocked') {
+            if (this.lives !== null)
+                this.lives--;
+            this.feedback.set(id, { until: this.time + CONFIG.feedbackMs, blocker: result.blocker });
+            this.emit('blocked', { id, blocker: result.blocker, lives: this.lives });
+            if (this.lives === 0) {
+                this.state = 'failed';
+                this.emit('failed');
+            }
+        }
+        else if (result.type === 'allowed') {
+            this.moves.set(id, { id, distance: 0, elapsedMs: 0 });
+            this.emit('move-start', { id });
+        }
+        return result;
+    }
+    complete(id) {
+        if (!this.moves.has(id) || this.removed.has(id))
+            return false;
+        this.moves.delete(id);
+        this.removed.add(id);
+        this.emit('removed', { id, remaining: this.remaining });
+        if (this.remaining === 0 && this.state !== 'failed' && this.state !== 'won') {
+            this.state = 'won';
+            this.emit('won');
+        }
+        return true;
+    }
+    tick(ms) {
+        if (this.state === 'paused')
+            return;
+        if (!Number.isFinite(ms) || ms < 0)
+            throw new Error('Invalid elapsed time');
+        this.time += ms;
+        for (const [id, f] of this.feedback)
+            if (f.until <= this.time)
+                this.feedback.delete(id);
+        for (const [id, move] of this.moves) {
+            const arrow = this.level.arrows.find(a => a.id === id);
+            move.elapsedMs += ms;
+            move.distance = move.elapsedMs * CONFIG.speed / 1000;
+            if (move.distance >= completionDistance(arrow, this.level))
+                this.complete(id);
+        }
+    }
+    paths() { const result = new Map(); for (const [id, m] of this.moves)
+        result.set(id, bodyAt(this.level.arrows.find(a => a.id === id), m.distance)); return result; }
+    pause() { if (this.state === 'playing') {
+        this.state = 'paused';
+        return true;
+    } return false; }
+    resume() { if (this.state === 'paused')
+        this.state = 'playing'; }
+    restart() { return new Session(this.level); }
+}
+module.exports = { Session };
+
+},
+"src/domain/board.js":function(module,exports,require){
+'use strict';
+const DIRS = Object.freeze({ up: [0, -1], right: [1, 0], down: [0, 1], left: [-1, 0] });
+const key = p => p[0] + ',' + p[1];
+const inside = (p, level) => p[0] >= 0 && p[1] >= 0 && p[0] < level.width && p[1] < level.height;
+const clone = value => JSON.parse(JSON.stringify(value));
+function exitCells(a, level) {
+    const d = DIRS[a.direction], h = a.path[a.path.length - 1], cells = [];
+    for (let p = [h[0] + d[0], h[1] + d[1]]; inside(p, level); p = [p[0] + d[0], p[1] + d[1]])
+        cells.push(p);
+    return cells;
+}
+function validateLevel(level) {
+    const errors = [];
+    if (!level || !Number.isInteger(level.width) || !Number.isInteger(level.height) || level.width < 2 || level.height < 2 || level.width > 32 || level.height > 32 || !Array.isArray(level.arrows) || !level.arrows.length)
+        return { valid: false, errors: ['invalid-board'] };
+    if (level.lifeLimit !== null && (!Number.isInteger(level.lifeLimit) || level.lifeLimit < 1))
+        errors.push('invalid-life-limit');
+    const ids = new Set(), occupied = new Map();
+    for (const a of level.arrows) {
+        if (!a || typeof a !== 'object') {
+            errors.push('invalid-arrow');
+            continue;
+        }
+        if (typeof a.id !== 'string' || !a.id || ids.has(a.id))
+            errors.push('duplicate-or-invalid-id');
+        ids.add(a.id);
+        if (!DIRS[a.direction] || !Array.isArray(a.path) || a.path.length < 2) {
+            errors.push('invalid-arrow');
+            continue;
+        }
+        let valid = true;
+        const own = new Set();
+        for (let i = 0; i < a.path.length; i++) {
+            const p = a.path[i];
+            if (!Array.isArray(p) || p.length !== 2 || !p.every(Number.isInteger) || !inside(p, level)) {
+                errors.push('out-of-bounds');
+                valid = false;
+                continue;
+            }
+            const k = key(p);
+            if (own.has(k)) {
+                errors.push('self-intersection');
+                valid = false;
+            }
+            own.add(k);
+            if (occupied.has(k) && occupied.get(k) !== a.id)
+                errors.push('overlap');
+            occupied.set(k, a.id);
+            if (i && (!Array.isArray(a.path[i - 1]) || Math.abs(p[0] - a.path[i - 1][0]) + Math.abs(p[1] - a.path[i - 1][1]) !== 1)) {
+                errors.push('disconnected-path');
+                valid = false;
+            }
+        }
+        if (!valid)
+            continue;
+        const h = a.path[a.path.length - 1], p = a.path[a.path.length - 2], d = DIRS[a.direction];
+        if (h[0] - p[0] !== d[0] || h[1] - p[1] !== d[1])
+            errors.push('head-direction-mismatch');
+        if (exitCells(a, level).some(p => own.has(key(p))))
+            errors.push('self-blocked');
+    }
+    return { valid: errors.length === 0, errors: [...new Set(errors)] };
+}
+function occupancy(level, excluded = new Set()) {
+    const map = new Map();
+    for (const a of level.arrows)
+        if (!excluded.has(a.id))
+            for (const p of a.path)
+                map.set(key(p), a.id);
+    return map;
+}
+function firstBlocker(a, level, occupied) {
+    for (const p of exitCells(a, level))
+        if (occupied.has(key(p)))
+            return { id: occupied.get(key(p)), cell: p };
+    return null;
+}
+module.exports = { DIRS, key, inside, clone, exitCells, validateLevel, occupancy, firstBlocker };
+
+},
+"src/movement/path.js":function(module,exports,require){
+'use strict';
+const { DIRS, key } = require("src/domain/board.js");
+const CLEARANCE = .16;
+function pointAt(arrow, distance) {
+    const path = arrow.path, L = path.length - 1;
+    if (distance >= L) {
+        const h = path[L], d = DIRS[arrow.direction];
+        return [h[0] + d[0] * (distance - L), h[1] + d[1] * (distance - L)];
+    }
+    const i = Math.max(0, Math.floor(distance)), f = distance - i, a = path[i], b = path[i + 1];
+    return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+}
+function bodyAt(arrow, distance) {
+    const end = arrow.path.length - 1 + distance, result = [pointAt(arrow, distance)];
+    for (let i = Math.floor(distance) + 1; i < Math.min(end, arrow.path.length - 1); i++)
+        result.push(arrow.path[i]);
+    if (distance < arrow.path.length - 1 && end > arrow.path.length - 1)
+        result.push(arrow.path[arrow.path.length - 1]);
+    result.push(pointAt(arrow, end));
+    return result;
+}
+function completionDistance(arrow, level) { const h = arrow.path[arrow.path.length - 1]; return arrow.path.length - 1 + ({ up: h[1] + .5, down: level.height - .5 - h[1], left: h[0] + .5, right: level.width - .5 - h[0] }[arrow.direction]) + CLEARANCE; }
+function segmentDistance(p, a, b) { const dx = b[0] - a[0], dy = b[1] - a[1], sq = dx * dx + dy * dy; const t = sq ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / sq)) : 0; return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy); }
+function occupiedByBody(arrow, distance, level) {
+    const points = bodyAt(arrow, distance), cells = new Set();
+    for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1], b = points[i];
+        for (let x = Math.max(0, Math.ceil(Math.min(a[0], b[0]) - CLEARANCE)); x <= Math.min(level.width - 1, Math.floor(Math.max(a[0], b[0]) + CLEARANCE)); x++)
+            for (let y = Math.max(0, Math.ceil(Math.min(a[1], b[1]) - CLEARANCE)); y <= Math.min(level.height - 1, Math.floor(Math.max(a[1], b[1]) + CLEARANCE)); y++)
+                if (segmentDistance([x, y], a, b) <= CLEARANCE)
+                    cells.add(key([x, y]));
+    }
+    return cells;
+}
+module.exports = { pointAt, bodyAt, completionDistance, segmentDistance, occupiedByBody, CLEARANCE };
+
+},
+"src/config.js":function(module,exports,require){
+'use strict';
+const CONFIG = Object.freeze({
+    title: '箭间', version: 1, generatorVersion: 1, profileVersion: 3,
+    speed: 12, feedbackMs: 200, messageMs: 1200, dragTolerance: 10,
+    lifeStart: 21, lives: 3, campaignLength: 30,
+    profiles: [
+        { name: '初见', size: 6, minFill: .35, maxFill: .50, maxLength: 6, maxTurns: 2, minDepth: 1, maxOpenRatio: 1 },
+        { name: '寻路', size: 8, minFill: .50, maxFill: .63, maxLength: 9, maxTurns: 3, minDepth: 2, maxOpenRatio: .8 },
+        { name: '交错', size: 10, minFill: .63, maxFill: .73, maxLength: 12, maxTurns: 4, minDepth: 3, maxOpenRatio: .7 },
+        { name: '解围', size: 12, minFill: .70, maxFill: .82, maxLength: 16, maxTurns: 5, minDepth: 4, maxOpenRatio: .6 },
+        { name: '从容', size: 12, minFill: .75, maxFill: .85, maxLength: 18, maxTurns: 6, minDepth: 5, maxOpenRatio: .5 }
+    ]
+});
+function profileIndex(number) { return number <= 1 ? 0 : number <= 2 ? 1 : 4; }
+function lifeLimit(number) { return number >= CONFIG.lifeStart ? CONFIG.lives : null; }
+module.exports = { CONFIG, profileIndex, lifeLimit };
+
+},
+"src/generation/generator.js":function(module,exports,require){
+'use strict';
+const { CONFIG, profileIndex, lifeLimit } = require("src/config.js");
+const { DIRS, key, inside, exitCells, clone } = require("src/domain/board.js");
+const { random, shuffle } = require("src/generation/random.js");
+const { solve } = require("src/generation/validate.js");
+const { fixtures } = require("src/fixtures.js");
+function acceptable(metrics, profile) { return metrics.fill >= profile.minFill && metrics.fill <= profile.maxFill && metrics.depth >= profile.minDepth && metrics.openRatio <= profile.maxOpenRatio; }
+function* candidate(number, seed, profile, rng) {
+    const level = { number, width: profile.size, height: profile.size, seed: seed >>> 0, generatorVersion: CONFIG.generatorVersion, profileVersion: CONFIG.profileVersion, lifeLimit: lifeLimit(number), arrows: [] };
+    const occupied = new Set(), target = Math.ceil(profile.minFill * profile.size ** 2 + rng() * (profile.maxFill - profile.minFill) * profile.size ** 2);
+    const maxCells = Math.floor(profile.maxFill * profile.size ** 2);
+    for (let attempt = 0; attempt < 1500 && occupied.size < target; attempt++) {
+        if (attempt % 40 === 0)
+            yield null;
+        const h = [Math.floor(rng() * profile.size), Math.floor(rng() * profile.size)];
+        if (occupied.has(key(h)))
+            continue;
+        const direction = Object.keys(DIRS)[Math.floor(rng() * 4)], d = DIRS[direction];
+        const exit = exitCells({ path: [h], direction }, level);
+        if (exit.some(p => occupied.has(key(p))))
+            continue;
+        const forbidden = new Set(exit.map(key)), prev = [h[0] - d[0], h[1] - d[1]];
+        if (!inside(prev, level) || occupied.has(key(prev)) || occupied.size + 2 > maxCells)
+            continue;
+        const reverse = [h, prev], own = new Set([key(h), key(prev)]);
+        const length = Math.min(2 + Math.floor(rng() * (profile.maxLength - 1)), maxCells - occupied.size);
+        let turns = 0, last = [-d[0], -d[1]];
+        while (reverse.length < length) {
+            const tail = reverse[reverse.length - 1];
+            let found = false;
+            for (const v of shuffle(Object.values(DIRS), rng)) {
+                const p = [tail[0] + v[0], tail[1] + v[1]], k = key(p), turn = v[0] !== last[0] || v[1] !== last[1];
+                if (!inside(p, level) || occupied.has(k) || own.has(k) || forbidden.has(k) || turn && turns >= profile.maxTurns)
+                    continue;
+                reverse.push(p);
+                own.add(k);
+                if (turn)
+                    turns++;
+                last = v;
+                found = true;
+                break;
+            }
+            if (!found)
+                break;
+        }
+        const arrow = { id: 'a' + level.arrows.length, path: reverse.reverse(), direction };
+        level.arrows.push(arrow);
+        for (const p of arrow.path)
+            occupied.add(key(p));
+    }
+    return level;
+}
+function* generateSteps(number, seed, options = {}) {
+    if (!Number.isInteger(number) || number < 1 || !Number.isInteger(seed))
+        throw new Error('Invalid generation input');
+    if (number === 1 && !options.forceRandom) {
+        const l = clone(fixtures.tutorial);
+        l.seed = seed >>> 0;
+        l.profileVersion = CONFIG.profileVersion;
+        return { level: l, validation: solve(l), attempts: 0, fallback: false };
+    }
+    const profile = CONFIG.profiles[profileIndex(number)], rng = random(seed), maxAttempts = options.maxAttempts ?? 48;
+    for (let i = 0; i < maxAttempts; i++) {
+        const level = yield* candidate(number, seed, profile, rng), validation = solve(level);
+        if (validation.valid && acceptable(validation.metrics, profile))
+            return { level, validation, attempts: i + 1, fallback: false };
+        yield null;
+    }
+    if (options.noFallback)
+        throw new Error('Generation budget exhausted for ' + number + '/' + seed);
+    const fallbacks = require("src/generation/fallbacks.js");
+    const level = clone(fallbacks[profileIndex(number)]);
+    if (!level)
+        throw new Error('Missing verified fallback');
+    level.number = number;
+    level.seed = seed >>> 0;
+    level.lifeLimit = lifeLimit(number);
+    level.profileVersion = CONFIG.profileVersion;
+    const validation = solve(level);
+    if (!validation.valid || !acceptable(validation.metrics, profile))
+        throw new Error('Invalid fallback');
+    return { level, validation, attempts: maxAttempts, fallback: true };
+}
+function generate(number, seed, options) { const task = generateSteps(number, seed, options); let step; do {
+    step = task.next();
+} while (!step.done); return step.value; }
+function generateAsync(number, seed, { schedule = fn => setTimeout(fn, 0), ...options } = {}) {
+    const task = generateSteps(number, seed, options);
+    return new Promise((resolve, reject) => { function step() { try {
+        const result = task.next();
+        if (result.done)
+            resolve(result.value);
+        else
+            schedule(step);
+    }
+    catch (e) {
+        reject(e);
+    } } step(); });
+}
+module.exports = { generate, generateSteps, generateAsync, acceptable };
+
+},
+"src/generation/random.js":function(module,exports,require){
+'use strict';
+function random(seed) { let state = seed >>> 0; return () => { state = (state + 0x6D2B79F5) >>> 0; let t = state; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function shuffle(items, rng) { const a = items.slice(); for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+} return a; }
+module.exports = { random, shuffle };
+
+},
+"src/generation/validate.js":function(module,exports,require){
+'use strict';
+const { validateLevel, DIRS, key } = require("src/domain/board.js");
+function solve(level) {
+    const check = validateLevel(level);
+    if (!check.valid)
+        return { ...check, sequence: [], layers: [], metrics: null };
+    const pending = new Map(level.arrows.map(a => [a.id, a])), sequence = [], layers = [];
+    while (pending.size) {
+        const used = new Map();
+        for (const a of pending.values())
+            for (const p of a.path)
+                used.set(key(p), a.id);
+        const ready = [];
+        for (const a of pending.values()) {
+            const h = a.path[a.path.length - 1], d = DIRS[a.direction];
+            let blocked = false;
+            for (let x = h[0] + d[0], y = h[1] + d[1]; x >= 0 && y >= 0 && x < level.width && y < level.height; x += d[0], y += d[1])
+                if (used.has(x + ',' + y)) {
+                    blocked = true;
+                    break;
+                }
+            if (!blocked)
+                ready.push(a.id);
+        }
+        if (!ready.length)
+            return { valid: false, errors: ['unsolvable'], sequence, layers, remaining: [...pending.keys()], metrics: null };
+        layers.push(ready);
+        for (const id of ready) {
+            sequence.push(id);
+            pending.delete(id);
+        }
+    }
+    let cells = 0, turns = 0;
+    for (const a of level.arrows) {
+        cells += a.path.length;
+        for (let i = 2; i < a.path.length; i++)
+            if (a.path[i][0] - a.path[i - 1][0] !== a.path[i - 1][0] - a.path[i - 2][0] || a.path[i][1] - a.path[i - 1][1] !== a.path[i - 1][1] - a.path[i - 2][1])
+                turns++;
+    }
+    return { valid: true, errors: [], sequence, layers, metrics: { fill: cells / (level.width * level.height), arrowCount: level.arrows.length, averageLength: cells / level.arrows.length, turns, depth: layers.length, initialOpen: layers[0].length, openRatio: layers[0].length / level.arrows.length } };
+}
+module.exports = { solve };
+
+},
+"src/fixtures.js":function(module,exports,require){
+'use strict';
+const arrow = (id, path, direction) => ({ id, path, direction });
+const level = (arrows, extra = {}) => ({ number: 1, width: 6, height: 6, seed: 1, generatorVersion: 1, profileVersion: 1, lifeLimit: null, arrows, ...extra });
+const fixtures = {
+    tutorial: level([
+        arrow('first', [[1, 1], [2, 1], [3, 1]], 'right'),
+        arrow('second', [[1, 4], [2, 4], [2, 3], [2, 2]], 'up'),
+        arrow('third', [[4, 3], [4, 4], [4, 5]], 'down')
+    ]),
+    bent: level([arrow('bend', [[1, 4], [1, 3], [2, 3], [3, 3], [3, 2]], 'up')]),
+    blocked: level([arrow('a', [[0, 2], [1, 2]], 'right'), arrow('b', [[4, 3], [4, 2], [4, 1]], 'up')]),
+    cycle: level([arrow('a', [[1, 1], [2, 1]], 'right'), arrow('b', [[4, 1], [4, 2]], 'down'), arrow('c', [[4, 4], [3, 4]], 'left'), arrow('d', [[1, 4], [1, 3]], 'up')]),
+    selfBlocked: level([arrow('a', [[2, 0], [3, 0], [3, 1], [3, 2], [2, 2], [2, 1]], 'up')]),
+    boundary: level([arrow('a', [[4, 0], [5, 0]], 'right')])
+};
+module.exports = { arrow, level, fixtures };
+
+},
+"src/generation/fallbacks.js":function(module,exports,require){
+'use strict';
+// Verified fallback layouts; do not regenerate on restart.
+module.exports = [
+    {
+        "number": 2,
+        "width": 6,
+        "height": 6,
+        "seed": 92000,
+        "generatorVersion": 1,
+        "profileVersion": 1,
+        "lifeLimit": null,
+        "arrows": [
+            {
+                "id": "a0",
+                "path": [
+                    [
+                        0,
+                        0
+                    ],
+                    [
+                        1,
+                        0
+                    ],
+                    [
+                        2,
+                        0
+                    ]
+                ],
+                "direction": "right"
+            },
+            {
+                "id": "a1",
+                "path": [
+                    [
+                        3,
+                        2
+                    ],
+                    [
+                        2,
+                        2
+                    ],
+                    [
+                        1,
+                        2
+                    ],
+                    [
+                        0,
+                        2
+                    ],
+                    [
+                        0,
+                        1
+                    ],
+                    [
+                        1,
+                        1
+                    ]
+                ],
+                "direction": "right"
+            },
+            {
+                "id": "a2",
+                "path": [
+                    [
+                        5,
+                        5
+                    ],
+                    [
+                        5,
+                        4
+                    ],
+                    [
+                        5,
+                        3
+                    ],
+                    [
+                        4,
+                        3
+                    ],
+                    [
+                        3,
+                        3
+                    ]
+                ],
+                "direction": "left"
+            },
+            {
+                "id": "a3",
+                "path": [
+                    [
+                        0,
+                        5
+                    ],
+                    [
+                        0,
+                        4
+                    ],
+                    [
+                        1,
+                        4
+                    ],
+                    [
+                        1,
+                        5
+                    ]
+                ],
+                "direction": "down"
+            }
+        ]
+    },
+    {
+        "number": 4,
+        "width": 8,
+        "height": 8,
+        "seed": 92001,
+        "generatorVersion": 1,
+        "profileVersion": 1,
+        "lifeLimit": null,
+        "arrows": [
+            {
+                "id": "a0",
+                "path": [
+                    [
+                        1,
+                        4
+                    ],
+                    [
+                        1,
+                        3
+                    ],
+                    [
+                        1,
+                        2
+                    ],
+                    [
+                        0,
+                        2
+                    ],
+                    [
+                        0,
+                        1
+                    ],
+                    [
+                        0,
+                        0
+                    ],
+                    [
+                        1,
+                        0
+                    ]
+                ],
+                "direction": "right"
+            },
+            {
+                "id": "a1",
+                "path": [
+                    [
+                        2,
+                        5
+                    ],
+                    [
+                        2,
+                        6
+                    ],
+                    [
+                        2,
+                        7
+                    ],
+                    [
+                        1,
+                        7
+                    ],
+                    [
+                        1,
+                        6
+                    ],
+                    [
+                        0,
+                        6
+                    ]
+                ],
+                "direction": "left"
+            },
+            {
+                "id": "a2",
+                "path": [
+                    [
+                        5,
+                        1
+                    ],
+                    [
+                        6,
+                        1
+                    ],
+                    [
+                        6,
+                        2
+                    ],
+                    [
+                        7,
+                        2
+                    ],
+                    [
+                        7,
+                        3
+                    ],
+                    [
+                        7,
+                        4
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a3",
+                "path": [
+                    [
+                        2,
+                        1
+                    ],
+                    [
+                        2,
+                        0
+                    ],
+                    [
+                        3,
+                        0
+                    ],
+                    [
+                        3,
+                        1
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a4",
+                "path": [
+                    [
+                        7,
+                        5
+                    ],
+                    [
+                        6,
+                        5
+                    ],
+                    [
+                        5,
+                        5
+                    ],
+                    [
+                        4,
+                        5
+                    ],
+                    [
+                        3,
+                        5
+                    ],
+                    [
+                        3,
+                        6
+                    ],
+                    [
+                        4,
+                        6
+                    ],
+                    [
+                        4,
+                        7
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a5",
+                "path": [
+                    [
+                        3,
+                        2
+                    ],
+                    [
+                        4,
+                        2
+                    ],
+                    [
+                        4,
+                        1
+                    ],
+                    [
+                        4,
+                        0
+                    ],
+                    [
+                        5,
+                        0
+                    ],
+                    [
+                        6,
+                        0
+                    ],
+                    [
+                        7,
+                        0
+                    ]
+                ],
+                "direction": "right"
+            }
+        ]
+    },
+    {
+        "number": 9,
+        "width": 10,
+        "height": 10,
+        "seed": 92002,
+        "generatorVersion": 1,
+        "profileVersion": 1,
+        "lifeLimit": null,
+        "arrows": [
+            {
+                "id": "a0",
+                "path": [
+                    [
+                        6,
+                        2
+                    ],
+                    [
+                        5,
+                        2
+                    ],
+                    [
+                        5,
+                        1
+                    ],
+                    [
+                        5,
+                        0
+                    ],
+                    [
+                        4,
+                        0
+                    ],
+                    [
+                        4,
+                        1
+                    ],
+                    [
+                        3,
+                        1
+                    ]
+                ],
+                "direction": "left"
+            },
+            {
+                "id": "a1",
+                "path": [
+                    [
+                        1,
+                        1
+                    ],
+                    [
+                        1,
+                        2
+                    ],
+                    [
+                        0,
+                        2
+                    ],
+                    [
+                        0,
+                        3
+                    ],
+                    [
+                        0,
+                        4
+                    ],
+                    [
+                        0,
+                        5
+                    ],
+                    [
+                        0,
+                        6
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a2",
+                "path": [
+                    [
+                        6,
+                        8
+                    ],
+                    [
+                        6,
+                        7
+                    ],
+                    [
+                        6,
+                        6
+                    ],
+                    [
+                        6,
+                        5
+                    ],
+                    [
+                        6,
+                        4
+                    ],
+                    [
+                        5,
+                        4
+                    ],
+                    [
+                        4,
+                        4
+                    ],
+                    [
+                        4,
+                        3
+                    ],
+                    [
+                        4,
+                        2
+                    ],
+                    [
+                        3,
+                        2
+                    ],
+                    [
+                        3,
+                        3
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a3",
+                "path": [
+                    [
+                        0,
+                        7
+                    ],
+                    [
+                        0,
+                        8
+                    ],
+                    [
+                        0,
+                        9
+                    ],
+                    [
+                        1,
+                        9
+                    ],
+                    [
+                        1,
+                        8
+                    ],
+                    [
+                        1,
+                        7
+                    ],
+                    [
+                        1,
+                        6
+                    ],
+                    [
+                        1,
+                        5
+                    ],
+                    [
+                        1,
+                        4
+                    ],
+                    [
+                        1,
+                        3
+                    ],
+                    [
+                        2,
+                        3
+                    ],
+                    [
+                        2,
+                        2
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a4",
+                "path": [
+                    [
+                        3,
+                        8
+                    ],
+                    [
+                        3,
+                        7
+                    ],
+                    [
+                        3,
+                        6
+                    ],
+                    [
+                        4,
+                        6
+                    ],
+                    [
+                        4,
+                        5
+                    ],
+                    [
+                        5,
+                        5
+                    ],
+                    [
+                        5,
+                        6
+                    ],
+                    [
+                        5,
+                        7
+                    ],
+                    [
+                        5,
+                        8
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a5",
+                "path": [
+                    [
+                        7,
+                        0
+                    ],
+                    [
+                        8,
+                        0
+                    ],
+                    [
+                        9,
+                        0
+                    ],
+                    [
+                        9,
+                        1
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a6",
+                "path": [
+                    [
+                        2,
+                        4
+                    ],
+                    [
+                        2,
+                        5
+                    ],
+                    [
+                        2,
+                        6
+                    ],
+                    [
+                        2,
+                        7
+                    ],
+                    [
+                        2,
+                        8
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a7",
+                "path": [
+                    [
+                        2,
+                        9
+                    ],
+                    [
+                        3,
+                        9
+                    ],
+                    [
+                        4,
+                        9
+                    ],
+                    [
+                        5,
+                        9
+                    ],
+                    [
+                        6,
+                        9
+                    ],
+                    [
+                        7,
+                        9
+                    ]
+                ],
+                "direction": "right"
+            },
+            {
+                "id": "a8",
+                "path": [
+                    [
+                        3,
+                        0
+                    ],
+                    [
+                        2,
+                        0
+                    ]
+                ],
+                "direction": "left"
+            },
+            {
+                "id": "a9",
+                "path": [
+                    [
+                        5,
+                        3
+                    ],
+                    [
+                        6,
+                        3
+                    ]
+                ],
+                "direction": "right"
+            },
+            {
+                "id": "a10",
+                "path": [
+                    [
+                        7,
+                        8
+                    ],
+                    [
+                        8,
+                        8
+                    ]
+                ],
+                "direction": "right"
+            }
+        ]
+    },
+    {
+        "number": 16,
+        "width": 12,
+        "height": 12,
+        "seed": 92003,
+        "generatorVersion": 1,
+        "profileVersion": 1,
+        "lifeLimit": null,
+        "arrows": [
+            {
+                "id": "a0",
+                "path": [
+                    [
+                        9,
+                        1
+                    ],
+                    [
+                        9,
+                        2
+                    ],
+                    [
+                        9,
+                        3
+                    ],
+                    [
+                        9,
+                        4
+                    ],
+                    [
+                        9,
+                        5
+                    ],
+                    [
+                        9,
+                        6
+                    ],
+                    [
+                        9,
+                        7
+                    ],
+                    [
+                        9,
+                        8
+                    ],
+                    [
+                        9,
+                        9
+                    ],
+                    [
+                        10,
+                        9
+                    ],
+                    [
+                        11,
+                        9
+                    ],
+                    [
+                        11,
+                        10
+                    ],
+                    [
+                        11,
+                        11
+                    ],
+                    [
+                        10,
+                        11
+                    ],
+                    [
+                        10,
+                        10
+                    ],
+                    [
+                        9,
+                        10
+                    ]
+                ],
+                "direction": "left"
+            },
+            {
+                "id": "a1",
+                "path": [
+                    [
+                        11,
+                        1
+                    ],
+                    [
+                        11,
+                        0
+                    ],
+                    [
+                        10,
+                        0
+                    ],
+                    [
+                        9,
+                        0
+                    ],
+                    [
+                        8,
+                        0
+                    ],
+                    [
+                        8,
+                        1
+                    ],
+                    [
+                        8,
+                        2
+                    ],
+                    [
+                        7,
+                        2
+                    ],
+                    [
+                        7,
+                        3
+                    ],
+                    [
+                        7,
+                        4
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a2",
+                "path": [
+                    [
+                        2,
+                        2
+                    ],
+                    [
+                        2,
+                        3
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a3",
+                "path": [
+                    [
+                        4,
+                        9
+                    ],
+                    [
+                        3,
+                        9
+                    ],
+                    [
+                        2,
+                        9
+                    ],
+                    [
+                        1,
+                        9
+                    ],
+                    [
+                        1,
+                        8
+                    ],
+                    [
+                        2,
+                        8
+                    ],
+                    [
+                        3,
+                        8
+                    ],
+                    [
+                        3,
+                        7
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a4",
+                "path": [
+                    [
+                        8,
+                        3
+                    ],
+                    [
+                        8,
+                        4
+                    ],
+                    [
+                        8,
+                        5
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a5",
+                "path": [
+                    [
+                        0,
+                        5
+                    ],
+                    [
+                        0,
+                        6
+                    ],
+                    [
+                        0,
+                        7
+                    ],
+                    [
+                        0,
+                        8
+                    ],
+                    [
+                        0,
+                        9
+                    ],
+                    [
+                        0,
+                        10
+                    ],
+                    [
+                        1,
+                        10
+                    ],
+                    [
+                        2,
+                        10
+                    ],
+                    [
+                        2,
+                        11
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a6",
+                "path": [
+                    [
+                        4,
+                        0
+                    ],
+                    [
+                        4,
+                        1
+                    ],
+                    [
+                        4,
+                        2
+                    ],
+                    [
+                        3,
+                        2
+                    ],
+                    [
+                        3,
+                        3
+                    ],
+                    [
+                        4,
+                        3
+                    ],
+                    [
+                        5,
+                        3
+                    ],
+                    [
+                        5,
+                        4
+                    ],
+                    [
+                        4,
+                        4
+                    ]
+                ],
+                "direction": "left"
+            },
+            {
+                "id": "a7",
+                "path": [
+                    [
+                        8,
+                        6
+                    ],
+                    [
+                        7,
+                        6
+                    ],
+                    [
+                        6,
+                        6
+                    ],
+                    [
+                        6,
+                        7
+                    ],
+                    [
+                        5,
+                        7
+                    ],
+                    [
+                        5,
+                        6
+                    ],
+                    [
+                        5,
+                        5
+                    ],
+                    [
+                        6,
+                        5
+                    ],
+                    [
+                        6,
+                        4
+                    ],
+                    [
+                        6,
+                        3
+                    ],
+                    [
+                        6,
+                        2
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a8",
+                "path": [
+                    [
+                        5,
+                        9
+                    ],
+                    [
+                        6,
+                        9
+                    ],
+                    [
+                        6,
+                        10
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a9",
+                "path": [
+                    [
+                        10,
+                        8
+                    ],
+                    [
+                        10,
+                        7
+                    ],
+                    [
+                        10,
+                        6
+                    ],
+                    [
+                        11,
+                        6
+                    ],
+                    [
+                        11,
+                        5
+                    ],
+                    [
+                        10,
+                        5
+                    ],
+                    [
+                        10,
+                        4
+                    ],
+                    [
+                        11,
+                        4
+                    ]
+                ],
+                "direction": "right"
+            },
+            {
+                "id": "a10",
+                "path": [
+                    [
+                        5,
+                        2
+                    ],
+                    [
+                        5,
+                        1
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a11",
+                "path": [
+                    [
+                        1,
+                        5
+                    ],
+                    [
+                        1,
+                        6
+                    ],
+                    [
+                        2,
+                        6
+                    ],
+                    [
+                        3,
+                        6
+                    ],
+                    [
+                        4,
+                        6
+                    ],
+                    [
+                        4,
+                        7
+                    ],
+                    [
+                        4,
+                        8
+                    ],
+                    [
+                        5,
+                        8
+                    ],
+                    [
+                        6,
+                        8
+                    ],
+                    [
+                        7,
+                        8
+                    ],
+                    [
+                        7,
+                        9
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a12",
+                "path": [
+                    [
+                        2,
+                        1
+                    ],
+                    [
+                        3,
+                        1
+                    ],
+                    [
+                        3,
+                        0
+                    ],
+                    [
+                        2,
+                        0
+                    ],
+                    [
+                        1,
+                        0
+                    ],
+                    [
+                        1,
+                        1
+                    ],
+                    [
+                        0,
+                        1
+                    ],
+                    [
+                        0,
+                        0
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a13",
+                "path": [
+                    [
+                        5,
+                        0
+                    ],
+                    [
+                        6,
+                        0
+                    ],
+                    [
+                        6,
+                        1
+                    ],
+                    [
+                        7,
+                        1
+                    ],
+                    [
+                        7,
+                        0
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a14",
+                "path": [
+                    [
+                        3,
+                        10
+                    ],
+                    [
+                        4,
+                        10
+                    ],
+                    [
+                        5,
+                        10
+                    ],
+                    [
+                        5,
+                        11
+                    ],
+                    [
+                        6,
+                        11
+                    ],
+                    [
+                        7,
+                        11
+                    ],
+                    [
+                        7,
+                        10
+                    ],
+                    [
+                        8,
+                        10
+                    ],
+                    [
+                        8,
+                        11
+                    ]
+                ],
+                "direction": "down"
+            }
+        ]
+    },
+    {
+        "number": 21,
+        "width": 12,
+        "height": 12,
+        "seed": 92004,
+        "generatorVersion": 1,
+        "profileVersion": 1,
+        "lifeLimit": 3,
+        "arrows": [
+            {
+                "id": "a0",
+                "path": [
+                    [
+                        3,
+                        0
+                    ],
+                    [
+                        4,
+                        0
+                    ],
+                    [
+                        4,
+                        1
+                    ],
+                    [
+                        5,
+                        1
+                    ],
+                    [
+                        5,
+                        2
+                    ],
+                    [
+                        5,
+                        3
+                    ],
+                    [
+                        6,
+                        3
+                    ],
+                    [
+                        6,
+                        2
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a1",
+                "path": [
+                    [
+                        1,
+                        8
+                    ],
+                    [
+                        1,
+                        7
+                    ],
+                    [
+                        1,
+                        6
+                    ],
+                    [
+                        1,
+                        5
+                    ],
+                    [
+                        2,
+                        5
+                    ],
+                    [
+                        2,
+                        4
+                    ],
+                    [
+                        2,
+                        3
+                    ],
+                    [
+                        1,
+                        3
+                    ],
+                    [
+                        0,
+                        3
+                    ],
+                    [
+                        0,
+                        2
+                    ],
+                    [
+                        1,
+                        2
+                    ],
+                    [
+                        1,
+                        1
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a2",
+                "path": [
+                    [
+                        11,
+                        11
+                    ],
+                    [
+                        11,
+                        10
+                    ],
+                    [
+                        11,
+                        9
+                    ],
+                    [
+                        11,
+                        8
+                    ],
+                    [
+                        11,
+                        7
+                    ],
+                    [
+                        11,
+                        6
+                    ],
+                    [
+                        11,
+                        5
+                    ],
+                    [
+                        11,
+                        4
+                    ],
+                    [
+                        11,
+                        3
+                    ],
+                    [
+                        11,
+                        2
+                    ],
+                    [
+                        11,
+                        1
+                    ],
+                    [
+                        11,
+                        0
+                    ],
+                    [
+                        10,
+                        0
+                    ],
+                    [
+                        10,
+                        1
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a3",
+                "path": [
+                    [
+                        9,
+                        0
+                    ],
+                    [
+                        9,
+                        1
+                    ],
+                    [
+                        9,
+                        2
+                    ],
+                    [
+                        8,
+                        2
+                    ],
+                    [
+                        8,
+                        3
+                    ],
+                    [
+                        8,
+                        4
+                    ],
+                    [
+                        9,
+                        4
+                    ],
+                    [
+                        9,
+                        3
+                    ],
+                    [
+                        10,
+                        3
+                    ],
+                    [
+                        10,
+                        4
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a4",
+                "path": [
+                    [
+                        0,
+                        1
+                    ],
+                    [
+                        0,
+                        0
+                    ],
+                    [
+                        1,
+                        0
+                    ],
+                    [
+                        2,
+                        0
+                    ],
+                    [
+                        2,
+                        1
+                    ],
+                    [
+                        2,
+                        2
+                    ],
+                    [
+                        3,
+                        2
+                    ],
+                    [
+                        3,
+                        3
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a5",
+                "path": [
+                    [
+                        10,
+                        11
+                    ],
+                    [
+                        10,
+                        10
+                    ],
+                    [
+                        9,
+                        10
+                    ],
+                    [
+                        8,
+                        10
+                    ],
+                    [
+                        7,
+                        10
+                    ],
+                    [
+                        7,
+                        11
+                    ],
+                    [
+                        6,
+                        11
+                    ],
+                    [
+                        5,
+                        11
+                    ],
+                    [
+                        4,
+                        11
+                    ],
+                    [
+                        4,
+                        10
+                    ],
+                    [
+                        4,
+                        9
+                    ],
+                    [
+                        3,
+                        9
+                    ],
+                    [
+                        2,
+                        9
+                    ],
+                    [
+                        2,
+                        10
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a6",
+                "path": [
+                    [
+                        3,
+                        10
+                    ],
+                    [
+                        3,
+                        11
+                    ],
+                    [
+                        2,
+                        11
+                    ],
+                    [
+                        1,
+                        11
+                    ],
+                    [
+                        1,
+                        10
+                    ],
+                    [
+                        1,
+                        9
+                    ],
+                    [
+                        0,
+                        9
+                    ]
+                ],
+                "direction": "left"
+            },
+            {
+                "id": "a7",
+                "path": [
+                    [
+                        0,
+                        10
+                    ],
+                    [
+                        0,
+                        11
+                    ]
+                ],
+                "direction": "down"
+            },
+            {
+                "id": "a8",
+                "path": [
+                    [
+                        3,
+                        6
+                    ],
+                    [
+                        4,
+                        6
+                    ],
+                    [
+                        4,
+                        7
+                    ],
+                    [
+                        4,
+                        8
+                    ],
+                    [
+                        5,
+                        8
+                    ],
+                    [
+                        6,
+                        8
+                    ],
+                    [
+                        7,
+                        8
+                    ],
+                    [
+                        7,
+                        7
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a9",
+                "path": [
+                    [
+                        1,
+                        4
+                    ],
+                    [
+                        0,
+                        4
+                    ]
+                ],
+                "direction": "left"
+            },
+            {
+                "id": "a10",
+                "path": [
+                    [
+                        10,
+                        5
+                    ],
+                    [
+                        10,
+                        6
+                    ],
+                    [
+                        9,
+                        6
+                    ],
+                    [
+                        9,
+                        5
+                    ],
+                    [
+                        8,
+                        5
+                    ],
+                    [
+                        8,
+                        6
+                    ],
+                    [
+                        7,
+                        6
+                    ],
+                    [
+                        7,
+                        5
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a11",
+                "path": [
+                    [
+                        3,
+                        5
+                    ],
+                    [
+                        4,
+                        5
+                    ],
+                    [
+                        5,
+                        5
+                    ],
+                    [
+                        5,
+                        6
+                    ],
+                    [
+                        5,
+                        7
+                    ],
+                    [
+                        6,
+                        7
+                    ],
+                    [
+                        6,
+                        6
+                    ],
+                    [
+                        6,
+                        5
+                    ],
+                    [
+                        6,
+                        4
+                    ],
+                    [
+                        7,
+                        4
+                    ],
+                    [
+                        7,
+                        3
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a12",
+                "path": [
+                    [
+                        5,
+                        0
+                    ],
+                    [
+                        6,
+                        0
+                    ],
+                    [
+                        6,
+                        1
+                    ],
+                    [
+                        7,
+                        1
+                    ],
+                    [
+                        7,
+                        0
+                    ]
+                ],
+                "direction": "up"
+            },
+            {
+                "id": "a13",
+                "path": [
+                    [
+                        8,
+                        1
+                    ],
+                    [
+                        8,
+                        0
+                    ]
+                ],
+                "direction": "up"
+            }
+        ]
+    }
+];
+
+},
+"src/ui/view.js":function(module,exports,require){
+'use strict';
+const { drawBoard } = require("src/rendering/board.js");
+const { CONFIG, profileIndex } = require("src/config.js");
+const { fixtures } = require("src/fixtures.js");
+const COLORS = { bg: '#f5f3eb', paper: '#fffef9', ink: '#263f36', muted: '#7b8579', line: '#dfe4d8', green: '#397356', mint: '#e5eddf', red: '#ae5949' };
+function rounded(ctx, x, y, w, h, r, fill, stroke) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); if (fill) {
+    ctx.fillStyle = fill;
+    ctx.fill();
+} if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+} }
+function text(ctx, value, x, y, size = 16, color = COLORS.ink, align = 'left', weight = 400) { ctx.fillStyle = color; ctx.font = `${weight} ${size}px -apple-system, BlinkMacSystemFont, 'Microsoft YaHei', sans-serif`; ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.fillText(String(value), x, y); }
+function wrap(ctx, value, maxWidth, size = 15) { ctx.font = `${size}px sans-serif`; const lines = []; let line = ''; for (const ch of value) {
+    if (ch === '\n' || ctx.measureText(line + ch).width > maxWidth) {
+        lines.push(line);
+        line = ch === '\n' ? '' : ch;
+    }
+    else
+        line += ch;
+} if (line)
+    lines.push(line); return lines; }
+function layout(info) { const width = info.width, height = info.height; const top = Math.max(info.safeTop || 0, info.menuBottom || 0) + 12, bottom = height - (info.safeBottom || 0) - 16; const boardSize = Math.max(120, Math.min(width - 32, bottom - top - 220)); return { width, height, top, bottom, board: { x: (width - boardSize) / 2 + 10, y: top + 142, width: boardSize - 20, height: boardSize - 20 }, card: { x: (width - boardSize) / 2, y: top + 132, width: boardSize, height: boardSize } }; }
+class View {
+    constructor(ctx) { this.ctx = ctx; this.buttons = []; this.transform = null; this.lastLayout = null; }
+    button(id, label, x, y, w, h = 48, primary = false) { const c = this.ctx; rounded(c, x, y, w, h, 14, primary ? COLORS.ink : COLORS.paper, primary ? null : COLORS.line); text(c, label, x + w / 2, y + h / 2, 15, primary ? COLORS.paper : COLORS.ink, 'center', 500); this.buttons.push({ id, label, x, y, width: w, height: h }); }
+    render(app, info) {
+        const c = this.ctx, l = layout(info);
+        this.lastLayout = l;
+        this.buttons = [];
+        this.transform = null;
+        c.fillStyle = COLORS.bg;
+        c.fillRect(0, 0, l.width, l.height);
+        if (app.screen === 'home')
+            this.home(app, l);
+        else
+            this.game(app, l);
+        if (app.modal)
+            this.dialog(app, l);
+        if (app.savedError) {
+            rounded(c, 16, l.bottom - 48, l.width - 32, 44, 10, '#f7e7df');
+            text(c, app.retryRead ? '进度读取失败 · 点击重试' : '保存失败 · 点击重试', l.width / 2, l.bottom - 26, 13, COLORS.red, 'center');
+            this.buttons.push({ id: 'retry-save', label: '重试保存', x: 16, y: l.bottom - 48, width: l.width - 32, height: 44 });
+        }
+        app.dirty = false;
+    }
+    home(app, l) {
+        const c = this.ctx, w = l.width, usable = l.bottom - l.top;
+        text(c, 'ARROW GARDEN', w / 2, l.top + 22, 11, COLORS.muted, 'center', 500);
+        const titleY = l.top + usable * .16;
+        text(c, CONFIG.title, w / 2, titleY, 52, COLORS.ink, 'center', 500);
+        text(c, '让每条箭头，找到出口', w / 2, titleY + 43, 14, COLORS.muted, 'center');
+        const size = Math.min(w * .60, usable * .35), x = (w - size) / 2, y = titleY + 78;
+        rounded(c, x - 14, y - 12, size + 28, size + 24, 28, '#e9eddf');
+        drawBoard(c, fixtures.tutorial, { x, y, width: size, height: size });
+        const by = Math.min(l.bottom - 123, Math.max(y + size + 36, l.top + usable * .73));
+        text(c, '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关 · ' + CONFIG.profiles[profileIndex(app.currentLevel)].name, w / 2, by - 24, 13, COLORS.muted, 'center');
+        this.button('start', app.session ? '继续游戏' : '开始游戏', 32, by, w - 64, 54, true);
+        this.button('settings', '声音与震动', w / 2 - 72, by + 68, 144, 44);
+        if (app.recoveryNotice && !app.savedError)
+            text(c, app.recoveryNotice, w / 2, l.bottom + 3, 11, COLORS.red, 'center');
+    }
+    game(app, l) {
+        const c = this.ctx, w = l.width;
+        this.button('pause', 'Ⅱ', 16, l.top, 44, 44);
+        text(c, '箭间', w / 2, l.top + 15, 17, COLORS.ink, 'center', 500);
+        text(c, '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
+        const s = app.session;
+        text(c, '剩余箭头', 26, l.top + 80, 12, COLORS.muted);
+        text(c, s ? s.remaining : '—', 26, l.top + 108, 27, COLORS.ink, 'left', 500);
+        if (s?.lives !== null && s) {
+            text(c, '剩余机会', w - 26, l.top + 80, 12, COLORS.muted, 'right');
+            text(c, '♥'.repeat(s.lives) + '♡'.repeat(s.level.lifeLimit - s.lives), w - 26, l.top + 108, 23, COLORS.green, 'right');
+        }
+        else {
+            rounded(c, w - 108, l.top + 88, 82, 29, 14, COLORS.mint);
+            text(c, '自由尝试', w - 67, l.top + 103, 12, COLORS.green, 'center');
+        }
+        rounded(c, l.card.x, l.card.y, l.card.width, l.card.height, 22, COLORS.paper, COLORS.line);
+        if (s && !app.loading && !app.loadError) {
+            const colors = new Map(), offsets = new Map();
+            for (const id of s.moves.keys())
+                colors.set(id, COLORS.green);
+            for (const [id, f] of s.feedback) {
+                colors.set(id, COLORS.red);
+                colors.set(f.blocker.id, COLORS.red);
+                offsets.set(id, Math.sin((f.until - s.time) / 16) * 2.5);
+            }
+            this.transform = drawBoard(c, s.level, l.board, { removed: s.removed, paths: s.paths(), colors, offsets, grid: !!app.debugGrid });
+            if (app.tutorialStep === 1) {
+                const a = s.level.arrows.find(a => a.id === 'first'), p = this.transform.toScreen(a.path[a.path.length - 1]);
+                c.strokeStyle = COLORS.green;
+                c.lineWidth = 1.5;
+                c.beginPath();
+                c.arc(p[0], p[1], this.transform.cell * .5, 0, Math.PI * 2);
+                c.stroke();
+            }
+            const progress = s.removed.size / s.level.arrows.length, py = l.card.y + l.card.height + 19;
+            rounded(c, 32, py, w - 64, 3, 1.5, COLORS.line);
+            if (progress > 0)
+                rounded(c, 32, py, (w - 64) * progress, 3, 1.5, COLORS.green);
+            const message = app.message || (app.tutorialStep === 1 ? '点击圈中的箭头，沿方向移出棋盘' : '点击箭头，沿方向移出棋盘');
+            wrap(c, message, w - 42, 13).forEach((v, i) => text(c, v, w / 2, py + 30 + i * 20, 13, app.message ? COLORS.green : COLORS.muted, 'center'));
+        }
+        else {
+            text(c, app.loadError ? '暂时没有准备好' : '正在铺好棋盘…', w / 2, l.card.y + l.card.height / 2 - 16, 16, COLORS.muted, 'center');
+            if (app.loadError) {
+                this.button('retry-load', '重试', w / 2 - 70, l.card.y + l.card.height / 2 + 18, 140, 48, true);
+                this.button('home', '返回首页', w / 2 - 70, l.card.y + l.card.height / 2 + 80, 140, 44);
+            }
+        }
+    }
+    dialog(app, l) {
+        const c = this.ctx, w = l.width;
+        this.buttons = [];
+        c.fillStyle = 'rgba(30,48,40,.32)';
+        c.fillRect(0, 0, w, l.height);
+        let title = '', description = '', actions = [];
+        switch (app.modal) {
+            case 'pause':
+                title = '歇一会儿';
+                description = '棋盘会在这里等你。';
+                actions = [['resume', '继续游戏', true], ['restart-ask', '重新开始'], ['settings', '设置'], ['home', '返回首页']];
+                break;
+            case 'restart':
+                title = '重新开始本关？';
+                description = '当前消除进度将重置，棋盘布局保持不变。';
+                actions = [['restart-cancel', '继续游戏', true], ['restart', '重新开始']];
+                break;
+            case 'won':
+                title = '全部解开了';
+                description = '第 ' + app.currentLevel + ' 关完成，所有箭头已清空。';
+                actions = [['next', '下一关', true], ['home', '返回首页']];
+                break;
+            case 'failed':
+                title = '再试一次';
+                description = '本次机会已用完。先观察出口，再慢慢解开。';
+                actions = [['restart', '重新挑战', true], ['home', '返回首页']];
+                break;
+            case 'settings':
+                title = '设置';
+                description = '按你喜欢的方式，安静地解谜。';
+                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ...(!app.retryRead ? [['reset-progress-ask', '重置关卡进度']] : []), ['settings-done', '完成', true]];
+                break;
+            case 'reset-progress':
+                title = '重置关卡进度？';
+                description = '清除闯关进度，回到第 1 关。保留音效和震动设置。';
+                actions = [['reset-progress-cancel', '取消', true], ['reset-progress-confirm', '确认重置']];
+                break;
+            case 'life-intro':
+                title = '多一点挑战';
+                description = '从本关开始，点击被挡住的箭头会消耗一次机会。机会用完后，可以重新挑战。';
+                actions = [['life-accept', '知道了，开始', true]];
+                break;
+        }
+        const boxWidth = Math.min(w - 40, 340), lines = wrap(c, description, boxWidth - 48), boxHeight = 106 + lines.length * 23 + actions.length * 58 + 12, x = (w - boxWidth) / 2, y = Math.max(l.top, (l.height - boxHeight) / 2);
+        rounded(c, x, y, boxWidth, boxHeight, 24, COLORS.paper);
+        text(c, title, w / 2, y + 40, 24, COLORS.ink, 'center', 500);
+        lines.forEach((line, i) => text(c, line, w / 2, y + 82 + i * 23, 14, COLORS.muted, 'center'));
+        actions.forEach(([id, label, primary], i) => this.button(id, label, x + 20, y + 102 + lines.length * 23 + i * 58, boxWidth - 40, 48, primary));
+    }
+    hitButton(x, y) { return this.buttons.find(b => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height)?.id || null; }
+}
+module.exports = { View, layout, COLORS, rounded, text };
+
+},
+"src/rendering/board.js":function(module,exports,require){
+'use strict';
+function trimShaft(points, distance) {
+    const result = points.map(p => p.slice());
+    while (result.length > 1) {
+        const end = result[result.length - 1], previous = result[result.length - 2];
+        const length = Math.hypot(end[0] - previous[0], end[1] - previous[1]);
+        if (length <= distance) {
+            distance -= length;
+            result.pop();
+        } else {
+            result[result.length - 1] = [end[0] + (previous[0] - end[0]) * distance / length, end[1] + (previous[1] - end[1]) * distance / length];
+            break;
+        }
+    }
+    return result;
+}
+function drawArrow(ctx, points, direction, color = '#283b37', width = 3.2, unit = 24) {
+    if (points.length < 2)
+        return;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const length = Math.min(unit * .30, 10), half = length * .58;
+    // Keep the rounded shaft cap inside the filled arrowhead, including at small cell sizes.
+    const shaft = trimShaft(points, length * .7 + width / 2);
+    if (shaft.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(shaft[0][0], shaft[0][1]);
+        for (const p of shaft.slice(1))
+            ctx.lineTo(p[0], p[1]);
+        ctx.stroke();
+    }
+    const h = points[points.length - 1];
+    const d = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[direction];
+    ctx.beginPath();
+    ctx.moveTo(h[0] + d[0] * length * .25, h[1] + d[1] * length * .25);
+    ctx.lineTo(h[0] - d[0] * length - d[1] * half, h[1] - d[1] * length + d[0] * half);
+    ctx.lineTo(h[0] - d[0] * length + d[1] * half, h[1] - d[1] * length - d[0] * half);
+    ctx.closePath();
+    ctx.fill();
+}
+function boardTransform(level, rect) {
+    const cell = Math.min(rect.width / level.width, rect.height / level.height);
+    return { cell, x: rect.x + (rect.width - cell * level.width) / 2, y: rect.y + (rect.height - cell * level.height) / 2,
+        width: cell * level.width, height: cell * level.height,
+        toScreen(p) { return [this.x + (p[0] + .5) * cell, this.y + (p[1] + .5) * cell]; },
+        toBoard(p) { return [(p[0] - this.x) / cell - .5, (p[1] - this.y) / cell - .5]; } };
+}
+function drawBoard(ctx, level, rect, options = {}) {
+    const t = boardTransform(level, rect);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(t.x, t.y, t.width, t.height);
+    ctx.clip();
+    if (options.grid) {
+        ctx.fillStyle = '#c7d0c9';
+        for (let x = 0; x < level.width; x++)
+            for (let y = 0; y < level.height; y++) {
+                const p = t.toScreen([x, y]);
+                ctx.fillRect(p[0] - 1, p[1] - 1, 2, 2);
+            }
+    }
+    for (const a of level.arrows) {
+        if (options.removed?.has(a.id))
+            continue;
+        const path = options.paths?.get(a.id) || a.path;
+        const offset = options.offsets?.get(a.id) || 0;
+        drawArrow(ctx, path.map(p => { const s = t.toScreen(p); return [s[0] + offset, s[1]]; }), a.direction, options.colors?.get(a.id), Math.max(2.4, t.cell * .11), t.cell);
+    }
+    ctx.restore();
+    return t;
+}
+module.exports = { drawArrow, boardTransform, drawBoard };
+
+},
+"src/input/pointer.js":function(module,exports,require){
+'use strict';
+const { segmentDistance } = require("src/movement/path.js");
+const { DIRS } = require("src/domain/board.js");
+function hitArrow(level, point, removed = new Set(), paths = new Map(), tolerance = .32) {
+    let best = null, distance = Infinity;
+    for (const a of level.arrows) {
+        if (removed.has(a.id))
+            continue;
+        const path = paths.get(a.id) || a.path;
+        let d = Infinity;
+        for (let i = 1; i < path.length; i++)
+            d = Math.min(d, segmentDistance(point, path[i - 1], path[i]));
+        const h = path[path.length - 1], v = DIRS[a.direction];
+        for (const sign of [-1, 1])
+            d = Math.min(d, segmentDistance(point, h, [h[0] - v[0] * .3 - v[1] * .17 * sign, h[1] - v[1] * .3 + v[0] * .17 * sign]));
+        if (d <= tolerance && (d < distance - 1e-9 || (Math.abs(d - distance) < 1e-9 && a.id < (best || '~')))) {
+            distance = d;
+            best = a.id;
+        }
+    }
+    return best;
+}
+class Pointer {
+    constructor(tolerance = 10) { this.tolerance = tolerance; this.active = null; this.invalid = false; }
+    start(id, x, y, count = 1) { if (this.active || count !== 1) {
+        this.invalid = true;
+        return;
+    } this.active = { id, x, y }; this.invalid = false; }
+    move(id, x, y, count = 1) { if (count !== 1)
+        this.invalid = true; if (this.active && id === this.active.id && Math.hypot(x - this.active.x, y - this.active.y) > this.tolerance)
+        this.invalid = true; }
+    end(id, x, y) { if (!this.active || id !== this.active.id)
+        return null; this.move(id, x, y); const result = this.invalid ? null : [x, y]; this.cancel(); return result; }
+    cancel() { this.active = null; this.invalid = false; }
+}
+module.exports = { hitArrow, Pointer };
+
+},
+"src/persistence/store.js":function(module,exports,require){
+'use strict';
+const { clone, validateLevel } = require("src/domain/board.js");
+const { Session } = require("src/domain/session.js");
+const { solve } = require("src/generation/validate.js");
+const KEY = 'arrow-garden.save.v1', BACKUP = KEY + '.backup';
+function checksum(value) { let n = 2166136261; for (let i = 0; i < value.length; i++) {
+    n ^= value.charCodeAt(i);
+    n = Math.imul(n, 16777619);
+} return (n >>> 0).toString(16); }
+function snapshot(app) {
+    let session = null;
+    if (app.session) {
+        const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
+        session = { level: clone(s.level), removed, lives: s.lives, state: s.state === 'failed' ? 'failed' : removed.length === s.level.arrows.length ? 'won' : 'playing' };
+    }
+    return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, session };
+}
+function validProgress(p) { return Number.isInteger(p) && p >= 1 && p < 1000000; }
+function validate(data) {
+    if (!data || data.version !== 1 || !validProgress(data.currentLevel) || !validProgress(data.unlocked) || typeof data.tutorialDone !== 'boolean' || typeof data.lifeIntroDone !== 'boolean' || typeof data.settings?.sound !== 'boolean' || typeof data.settings?.vibration !== 'boolean')
+        return false;
+    if (data.session === null)
+        return true;
+    const s = data.session;
+    if (!s || !validateLevel(s.level).valid || !solve(s.level).valid || !validProgress(s.level.number) || s.level.number !== data.currentLevel || !Array.isArray(s.removed) || new Set(s.removed).size !== s.removed.length)
+        return false;
+    const ids = new Set(s.level.arrows.map(a => a.id));
+    if (s.removed.some(id => !ids.has(id)))
+        return false;
+    if (s.level.lifeLimit === null ? s.lives !== null : !Number.isInteger(s.lives) || s.lives < 0 || s.lives > s.level.lifeLimit)
+        return false;
+    if (!['playing', 'won', 'failed'].includes(s.state))
+        return false;
+    if (s.state === 'failed')
+        return s.lives === 0;
+    if (s.lives === 0)
+        return false;
+    return (s.state === 'won') === (s.removed.length === ids.size);
+}
+function encode(data) { const payload = JSON.stringify(data); return JSON.stringify({ payload, checksum: checksum(payload) }); }
+function decode(raw) { try {
+    const envelope = JSON.parse(raw);
+    if (typeof envelope.payload !== 'string' || checksum(envelope.payload) !== envelope.checksum)
+        return null;
+    const data = JSON.parse(envelope.payload);
+    return validate(data) ? data : null;
+}
+catch {
+    return null;
+} }
+function recoverOriginal(raw) {
+    try {
+        const envelope = JSON.parse(raw), data = JSON.parse(envelope.payload), level = data.session?.level;
+        if (!validateLevel(level).valid || !solve(level).valid || !validProgress(level.number))
+            return null;
+        return { version: 1, currentLevel: level.number, unlocked: level.number, settings: { sound: true, vibration: true }, tutorialDone: level.number > 1, lifeIntroDone: false, session: { level, removed: [], lives: level.lifeLimit, state: 'playing' } };
+    }
+    catch {
+        return null;
+    }
+}
+function createStore(storage) {
+    return { load() {
+            const raw = storage.get(KEY), backup = storage.get(BACKUP);
+            if (!raw && !backup)
+                return { data: null, recovered: false };
+            const current = decode(raw);
+            if (current)
+                return { data: current, recovered: false };
+            const previous = decode(backup);
+            if (previous)
+                return { data: previous, recovered: true };
+            return { data: recoverOriginal(raw) || recoverOriginal(backup), recovered: true };
+        }, save(data) { if (!validate(data))
+            throw new Error('Refusing invalid snapshot'); const value = encode(data); storage.set(KEY, value); storage.set(BACKUP, value); return true; } };
+}
+function restore(app, data) {
+    if (!validate(data))
+        throw new Error('Invalid saved game');
+    for (const key of ['currentLevel', 'unlocked', 'tutorialDone', 'lifeIntroDone'])
+        app[key] = data[key];
+    app.settings = { ...data.settings };
+    if (data.session) {
+        const state = data.session;
+        app.session = new Session(state.level);
+        app.session.removed = new Set(state.removed);
+        app.session.lives = state.lives;
+        app.session.state = state.state;
+        app.tutorialStep = state.level.number === 1 && !app.tutorialDone ? 1 : 0;
+    }
+    app.screen = 'home';
+    app.modal = null;
+}
+function bindPersistence(app, storage) {
+    const store = createStore(storage);
+    let readBlocked = false;
+    app.persist = () => { if (readBlocked) {
+        app.savedError = true;
+        return;
+    } try {
+        store.save(snapshot(app));
+        app.savedError = false;
+    }
+    catch {
+        app.savedError = true;
+    } app.dirty = true; };
+    function read() { try {
+        const loaded = store.load();
+        if (loaded.data)
+            restore(app, loaded.data);
+        readBlocked = false;
+        app.retryRead = null;
+        app.savedError = false;
+        if (loaded.recovered) {
+            app.recoveryNotice = '存档异常，已恢复可用进度';
+            app.say(app.recoveryNotice, 5000);
+        }
+    }
+    catch {
+        readBlocked = true;
+        app.savedError = true;
+        app.recoveryNotice = '暂时无法读取进度，请重试';
+        app.retryRead = read;
+    } app.dirty = true; }
+    read();
+    app.onChange = app.persist;
+    return store;
+}
+module.exports = { KEY, BACKUP, checksum, encode, decode, validate, snapshot, restore, createStore, bindPersistence };
+
+}};const cache={};function require(id){if(cache[id])return cache[id].exports;const module={exports:{}};cache[id]=module;if(!modules[id])throw new Error('Missing module '+id);modules[id](module,module.exports,require);return module.exports;}require("src/main-browser.js");})();

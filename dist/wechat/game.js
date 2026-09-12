@@ -75,24 +75,27 @@ const { Pointer, hitArrow } = require("src/input/pointer.js");
 const { bindPersistence } = require("src/persistence/store.js");
 function mount(platform, options = {}) {
     const app = new Controller(platform, options), view = new View(platform.ctx), pointer = new Pointer();
-    let frameId = null, last = null, hidden = false;
+    let frameId = null, last = null, hidden = false, drag = null;
     if (platform.storage)
         bindPersistence(app, platform.storage);
     function render() { view.ctx = platform.ctx; view.render(app, platform.info()); }
     function frame(now) { if (hidden)
         return; const delta = last === null ? 0 : Math.max(0, now - last); last = now; app.tick(delta); render(); frameId = platform.requestFrame(frame); }
-    platform.listen({ start: (...args) => pointer.start(...args), move: (...args) => pointer.move(...args), end: (...args) => { const p = pointer.end(...args); if (!p)
+    platform.listen({ start: (id, x, y, count) => { pointer.start(id, x, y, count); if (count !== 1) { drag = null; return; } if (!app.modal && view.transform && view.camera.zoom > 1 && view.camera.contains(x, y)) drag = { id, x, y }; }, move: (id, x, y, count) => { pointer.move(id, x, y, count); if (count !== 1) { drag = null; return; } if (drag && drag.id === id && !app.modal && pointer.invalid) { view.camera.pan(x - drag.x, y - drag.y); drag.x = x; drag.y = y; render(); } }, end: (...args) => { const p = pointer.end(...args); drag = null; if (!p)
             return; const button = view.hitButton(...p); if (button) {
-            app.action(button);
+            if (button === 'zoom-in') view.camera.change(1);
+            else if (button === 'zoom-out') view.camera.change(-1);
+            else if (button === 'zoom-reset') view.camera.reset();
+            else app.action(button);
             render();
             return;
         } if (view.transform && !app.modal) {
             const t = view.transform;
-            if (p[0] < t.x || p[1] < t.y || p[0] > t.x + t.width || p[1] > t.y + t.height)
+            if (!view.camera.contains(...p))
                 return;
             app.clickArrow(hitArrow(app.session.level, t.toBoard(p), app.session.removed, app.session.paths()));
             render();
-        } }, cancel: () => pointer.cancel(), hide: () => { hidden = true; pointer.cancel(); platform.cancelFrame(frameId); last = null; if (app.session)
+        } }, cancel: () => { pointer.cancel(); drag = null; }, hide: () => { hidden = true; pointer.cancel(); drag = null; platform.cancelFrame(frameId); last = null; if (app.session)
             for (const id of [...app.session.moves.keys()])
                 app.session.complete(id); app.events(); app.session?.pause(); app.persist?.(); platform.stopFeedback?.(); }, show: () => { if (!hidden)
             return; hidden = false; last = null; if (app.session?.state === 'paused' && !app.modal)
@@ -181,11 +184,14 @@ class Controller {
         }
         else
             this.modal = null;
+        if (!this.modal && [15, 20].includes(this.session.level.number)) {
+            this.session.pause(); this.modal = 'challenge-intro';
+        }
     }
     syncModal() {
         if (this.session.state === 'won')
             this.modal = 'won';
-        else if (this.session.state === 'failed' && !this.session.moves.size)
+        else if (this.session.state === 'failed' && (!this.session.moves.size || this.session.failureReason === 'timeout'))
             this.modal = 'failed';
         else if (this.session.level.lifeLimit !== null && !this.lifeIntroDone) {
             this.session.pause();
@@ -282,6 +288,24 @@ class Controller {
         }
         else if (name === 'vibration' && this.modal === 'settings')
             this.settings.vibration = !this.settings.vibration;
+        else if (name === 'reset-progress-ask' && (this.modal === 'settings' || this.screen === 'home' && !this.modal) && !this.retryRead) {
+            this.resetReturn = this.modal;
+            this.modal = 'reset-progress';
+        }
+        else if (name === 'reset-progress-cancel' && this.modal === 'reset-progress')
+            this.modal = this.resetReturn || null;
+        else if (name === 'reset-progress-confirm' && this.modal === 'reset-progress') {
+            this.token++;
+            this.platform.stopFeedback?.();
+            this.session = null;
+            this.currentLevel = this.unlocked = 1;
+            this.tutorialDone = this.lifeIntroDone = false;
+            this.tutorialStep = 0;
+            this.loading = this.loadError = false;
+            this.screen = 'home';
+            this.modal = this.settingsReturn = null;
+            this.say('关卡进度已重置，从第 1 关重新开始');
+        }
         else if (name === 'restart-ask' && this.modal === 'pause')
             this.modal = 'restart';
         else if (name === 'restart-cancel' && this.modal === 'restart') {
@@ -295,6 +319,10 @@ class Controller {
         }
         else if (name === 'life-accept' && this.modal === 'life-intro') {
             this.lifeIntroDone = true;
+            this.modal = null;
+            this.session.resume();
+        }
+        else if (name === 'challenge-accept' && this.modal === 'challenge-intro') {
             this.modal = null;
             this.session.resume();
         }
@@ -335,6 +363,8 @@ class Session {
         this.state = 'playing';
         this.time = 0;
         this.events = [];
+        this.remainingMs = level.timeLimitMs ?? null;
+        this.failureReason = null;
     }
     get remaining() { return this.level.arrows.length - this.removed.size; }
     emit(type, data = {}) { this.events.push({ type, ...data }); }
@@ -378,6 +408,7 @@ class Session {
             this.emit('blocked', { id, blocker: result.blocker, lives: this.lives });
             if (this.lives === 0) {
                 this.state = 'failed';
+                this.failureReason = 'lives';
                 this.emit('failed');
             }
         }
@@ -404,6 +435,16 @@ class Session {
             return;
         if (!Number.isFinite(ms) || ms < 0)
             throw new Error('Invalid elapsed time');
+        if (this.state === 'playing' && this.remainingMs !== null) {
+            if (this.moves.size === this.remaining && this.remaining > 0) {
+                const finish = Math.max(...[...this.moves].map(([id, move]) => Math.max(0, completionDistance(this.level.arrows.find(a => a.id === id), this.level) * 1000 / CONFIG.speed - move.elapsedMs)));
+                if (finish < this.remainingMs && finish <= ms) ms = finish;
+            }
+            const elapsed = Math.min(ms, this.remainingMs);
+            this.remainingMs -= elapsed;
+            ms = elapsed;
+            if (this.remainingMs === 0) { this.state = 'failed'; this.failureReason = 'timeout'; this.emit('failed', { reason: 'timeout' }); }
+        }
         this.time += ms;
         for (const [id, f] of this.feedback)
             if (f.until <= this.time)
@@ -448,6 +489,13 @@ function validateLevel(level) {
     if (level.lifeLimit !== null && (!Number.isInteger(level.lifeLimit) || level.lifeLimit < 1))
         errors.push('invalid-life-limit');
     const ids = new Set(), occupied = new Map();
+    if (level.timeLimitMs != null && (!Number.isInteger(level.timeLimitMs) || level.timeLimitMs <= 0)) errors.push('invalid-time-limit');
+    if (level.obstacles !== undefined && !Array.isArray(level.obstacles)) return { valid: false, errors: ['invalid-obstacles'] };
+    for (const p of level.obstacles || []) {
+        if (!Array.isArray(p) || p.length !== 2 || !p.every(Number.isInteger) || !inside(p, level)) { errors.push('invalid-obstacle'); continue; }
+        if (occupied.has(key(p))) errors.push('overlap');
+        occupied.set(key(p), '@stone:' + key(p));
+    }
     for (const a of level.arrows) {
         if (!a || typeof a !== 'object') {
             errors.push('invalid-arrow');
@@ -495,6 +543,7 @@ function validateLevel(level) {
 }
 function occupancy(level, excluded = new Set()) {
     const map = new Map();
+    for (const p of level.obstacles || []) map.set(key(p), '@stone:' + key(p));
     for (const a of level.arrows)
         if (!excluded.has(a.id))
             for (const p of a.path)
@@ -551,32 +600,47 @@ module.exports = { pointAt, bodyAt, completionDistance, segmentDistance, occupie
 "src/config.js":function(module,exports,require){
 'use strict';
 const CONFIG = Object.freeze({
-    title: '箭间', version: 1, generatorVersion: 1, profileVersion: 1,
+    title: '箭间', version: 1, generatorVersion: 4, profileVersion: 8,
     speed: 12, feedbackMs: 200, messageMs: 1200, dragTolerance: 10,
-    lifeStart: 21, lives: 3, campaignLength: 30,
+    lifeStart: 3, lives: 3, campaignLength: 30,
     profiles: [
         { name: '初见', size: 6, minFill: .35, maxFill: .50, maxLength: 6, maxTurns: 2, minDepth: 1, maxOpenRatio: 1 },
         { name: '寻路', size: 8, minFill: .50, maxFill: .63, maxLength: 9, maxTurns: 3, minDepth: 2, maxOpenRatio: .8 },
         { name: '交错', size: 10, minFill: .63, maxFill: .73, maxLength: 12, maxTurns: 4, minDepth: 3, maxOpenRatio: .7 },
         { name: '解围', size: 12, minFill: .70, maxFill: .82, maxLength: 16, maxTurns: 5, minDepth: 4, maxOpenRatio: .6 },
-        { name: '从容', size: 12, minFill: .75, maxFill: .85, maxLength: 18, maxTurns: 6, minDepth: 5, maxOpenRatio: .5 }
+        { name: '深锁', size: 14, minFill: 1, maxFill: 1, maxLength: 9, maxTurns: 7, minDepth: 10, maxOpenRatio: .05, minArrows: 36, maxInitialOpen: 1, dense: true },
+        ...[16, 18, 20].map((size, i) => ({ name: ['迷阵', '重围', '极境'][i], size, minFill: 1, maxFill: 1, maxLength: 9, maxTurns: 7, minDepth: 12 + i * 2, maxOpenRatio: .05, minArrows: Math.floor(size * size / 5), maxInitialOpen: 1, dense: true }))
     ]
 });
-function profileIndex(number) { return number <= 3 ? 0 : number <= 8 ? 1 : number <= 15 ? 2 : number <= 20 ? 3 : 4; }
+function profileIndex(number) { return number <= 1 ? 0 : number <= 2 ? 1 : 4 + Math.min(3, Math.floor((number - 3) / 5)); }
 function lifeLimit(number) { return number >= CONFIG.lifeStart ? CONFIG.lives : null; }
-module.exports = { CONFIG, profileIndex, lifeLimit };
+function obstacleCount(number) { return number < 15 ? 0 : Math.min(4, 1 + Math.floor((number - 15) / 5)); }
+function timeLimit(number) { return number < 20 ? null : Math.max(120, 180 - Math.floor((number - 20) / 5) * 10) * 1000; }
+module.exports = { CONFIG, profileIndex, lifeLimit, obstacleCount, timeLimit };
+
+
+
+
+
 
 },
 "src/generation/generator.js":function(module,exports,require){
 'use strict';
-const { CONFIG, profileIndex, lifeLimit } = require("src/config.js");
+const { CONFIG, profileIndex, lifeLimit, obstacleCount, timeLimit } = require("src/config.js");
 const { DIRS, key, inside, exitCells, clone } = require("src/domain/board.js");
 const { random, shuffle } = require("src/generation/random.js");
 const { solve } = require("src/generation/validate.js");
 const { fixtures } = require("src/fixtures.js");
-function acceptable(metrics, profile) { return metrics.fill >= profile.minFill && metrics.fill <= profile.maxFill && metrics.depth >= profile.minDepth && metrics.openRatio <= profile.maxOpenRatio; }
+function acceptable(metrics, profile) { return metrics.fill >= profile.minFill && metrics.fill <= profile.maxFill && metrics.depth >= profile.minDepth && metrics.openRatio <= profile.maxOpenRatio && metrics.arrowCount >= (profile.minArrows || 0) && metrics.initialOpen <= (profile.maxInitialOpen ?? Infinity); }
 function* candidate(number, seed, profile, rng) {
     const level = { number, width: profile.size, height: profile.size, seed: seed >>> 0, generatorVersion: CONFIG.generatorVersion, profileVersion: CONFIG.profileVersion, lifeLimit: lifeLimit(number), arrows: [] };
+    level.timeLimitMs = timeLimit(number);
+    level.obstacles = [];
+    while (level.obstacles.length < obstacleCount(number)) {
+        const p = [1 + Math.floor(rng() * (profile.size - 2)), 1 + Math.floor(rng() * (profile.size - 2))];
+        if (!level.obstacles.some(q => key(q) === key(p))) level.obstacles.push(p);
+    }
+    if (profile.dense) return yield* require("src/generation/dense.js").denseCandidate(level, profile, rng);
     const occupied = new Set(), target = Math.ceil(profile.minFill * profile.size ** 2 + rng() * (profile.maxFill - profile.minFill) * profile.size ** 2);
     const maxCells = Math.floor(profile.maxFill * profile.size ** 2);
     for (let attempt = 0; attempt < 1500 && occupied.size < target; attempt++) {
@@ -626,6 +690,7 @@ function* generateSteps(number, seed, options = {}) {
     if (number === 1 && !options.forceRandom) {
         const l = clone(fixtures.tutorial);
         l.seed = seed >>> 0;
+        l.profileVersion = CONFIG.profileVersion;
         return { level: l, validation: solve(l), attempts: 0, fallback: false };
     }
     const profile = CONFIG.profiles[profileIndex(number)], rng = random(seed), maxAttempts = options.maxAttempts ?? 48;
@@ -638,12 +703,15 @@ function* generateSteps(number, seed, options = {}) {
     if (options.noFallback)
         throw new Error('Generation budget exhausted for ' + number + '/' + seed);
     const fallbacks = require("src/generation/fallbacks.js");
-    const level = clone(fallbacks[profileIndex(number)]);
+    const level = clone(obstacleCount(number) ? require("src/generation/obstacle-fallbacks.js")[profile.size + ':' + obstacleCount(number)] : fallbacks[profileIndex(number)]);
     if (!level)
         throw new Error('Missing verified fallback');
     level.number = number;
     level.seed = seed >>> 0;
     level.lifeLimit = lifeLimit(number);
+    level.timeLimitMs = timeLimit(number);
+    level.profileVersion = CONFIG.profileVersion;
+    level.generatorVersion = CONFIG.generatorVersion;
     const validation = solve(level);
     if (!validation.valid || !acceptable(validation.metrics, profile))
         throw new Error('Invalid fallback');
@@ -688,6 +756,7 @@ function solve(level) {
     const pending = new Map(level.arrows.map(a => [a.id, a])), sequence = [], layers = [];
     while (pending.size) {
         const used = new Map();
+        for (const p of level.obstacles || []) used.set(key(p), '@stone');
         for (const a of pending.values())
             for (const p of a.path)
                 used.set(key(p), a.id);
@@ -711,16 +780,17 @@ function solve(level) {
             pending.delete(id);
         }
     }
-    let cells = 0, turns = 0;
+    let cells = (level.obstacles || []).length, turns = 0;
     for (const a of level.arrows) {
         cells += a.path.length;
         for (let i = 2; i < a.path.length; i++)
             if (a.path[i][0] - a.path[i - 1][0] !== a.path[i - 1][0] - a.path[i - 2][0] || a.path[i][1] - a.path[i - 1][1] !== a.path[i - 1][1] - a.path[i - 2][1])
                 turns++;
     }
-    return { valid: true, errors: [], sequence, layers, metrics: { fill: cells / (level.width * level.height), arrowCount: level.arrows.length, averageLength: cells / level.arrows.length, turns, depth: layers.length, initialOpen: layers[0].length, openRatio: layers[0].length / level.arrows.length } };
+    return { valid: true, errors: [], sequence, layers, metrics: { fill: cells / (level.width * level.height), arrowCount: level.arrows.length, averageLength: (cells - (level.obstacles || []).length) / level.arrows.length, turns, depth: layers.length, initialOpen: layers[0].length, openRatio: layers[0].length / level.arrows.length } };
 }
 module.exports = { solve };
+
 
 },
 "src/fixtures.js":function(module,exports,require){
@@ -742,1758 +812,7642 @@ const fixtures = {
 module.exports = { arrow, level, fixtures };
 
 },
+"src/generation/dense.js":function(module,exports,require){
+'use strict';
+const { DIRS } = require("src/domain/board.js");
+const { shuffle } = require("src/generation/random.js");
+const cache = new Map();
+function geometry(width, height) {
+    const cacheKey = width + ',' + height;
+    if (cache.has(cacheKey)) return cache.get(cacheKey);
+    const cells = Array.from({ length: width * height }, (_, id) => {
+        const x = id % width, y = Math.floor(id / width), neighbors = [], exits = [];
+        for (const [direction, [dx, dy]] of Object.entries(DIRS)) {
+            const nx = x + dx, ny = y + dy;
+            if (nx >= 0 && ny >= 0 && nx < width && ny < height) neighbors.push(ny * width + nx);
+            const px = x - dx, py = y - dy;
+            if (px < 0 || py < 0 || px >= width || py >= height) continue;
+            const ray = [];
+            for (let rx = nx, ry = ny; rx >= 0 && ry >= 0 && rx < width && ry < height; rx += dx, ry += dy) ray.push(ry * width + rx);
+            exits.push({ direction, previous: py * width + px, ray });
+        }
+        return { point: [x, y], neighbors, exits };
+    });
+    cache.set(cacheKey, cells);
+    return cells;
+}
+// Peel paths from a full board in removal order; each new path exits through earlier paths.
+function* denseCandidate(level, profile, rng) {
+    const cells = geometry(level.width, level.height);
+    const stones = new Set((level.obstacles || []).map(p => p[1] * level.width + p[0]));
+    const occupied = new Set(cells.map((_, i) => i).filter(i => !stones.has(i))), last = new Set();
+    while (occupied.size) {
+        yield null;
+        const choices = [];
+        for (const head of occupied) for (const exit of cells[head].exits) {
+            if (!occupied.has(exit.previous) || exit.ray.some(p => occupied.has(p) || stones.has(p))) continue;
+            if (level.arrows.length && !exit.ray.length) continue;
+            choices.push({ head, ...exit, score: exit.ray.some(p => last.has(p)) ? 1 : 0 });
+        }
+        const ordered = shuffle(choices, rng).sort((a, b) => b.score - a.score);
+        let accepted = false;
+        for (const choice of ordered) {
+            const path = [choice.head, choice.previous], own = new Set(path);
+            const target = 3 + Math.floor(rng() * (profile.maxLength - 2));
+            while (path.length < target) {
+                const next = shuffle(cells[path[path.length - 1]].neighbors, rng).find(p => occupied.has(p) && !own.has(p));
+                if (next === undefined) break;
+                path.push(next); own.add(next);
+            }
+            while (path.length >= 2) {
+                let isolated = false;
+                for (const value of occupied) {
+                    if (!own.has(value) && !cells[value].neighbors.some(p => occupied.has(p) && !own.has(p))) { isolated = true; break; }
+                }
+                if (!isolated) break;
+                own.delete(path.pop());
+            }
+            if (path.length < 2) continue;
+            for (const value of own) occupied.delete(value);
+            last.clear(); for (const value of own) last.add(value);
+            level.arrows.push({ id: 'a' + level.arrows.length, path: path.reverse().map(p => cells[p].point.slice()), direction: choice.direction });
+            accepted = true;
+            break;
+        }
+        if (!accepted) break;
+    }
+    return level;
+}
+module.exports = { denseCandidate };
+
+},
 "src/generation/fallbacks.js":function(module,exports,require){
 'use strict';
 // Verified fallback layouts; do not regenerate on restart.
-module.exports = [
-    {
-        "number": 2,
-        "width": 6,
-        "height": 6,
-        "seed": 92000,
-        "generatorVersion": 1,
-        "profileVersion": 1,
-        "lifeLimit": null,
-        "arrows": [
-            {
-                "id": "a0",
-                "path": [
-                    [
-                        0,
-                        0
-                    ],
-                    [
-                        1,
-                        0
-                    ],
-                    [
-                        2,
-                        0
-                    ]
-                ],
-                "direction": "right"
-            },
-            {
-                "id": "a1",
-                "path": [
-                    [
-                        3,
-                        2
-                    ],
-                    [
-                        2,
-                        2
-                    ],
-                    [
-                        1,
-                        2
-                    ],
-                    [
-                        0,
-                        2
-                    ],
-                    [
-                        0,
-                        1
-                    ],
-                    [
-                        1,
-                        1
-                    ]
-                ],
-                "direction": "right"
-            },
-            {
-                "id": "a2",
-                "path": [
-                    [
-                        5,
-                        5
-                    ],
-                    [
-                        5,
-                        4
-                    ],
-                    [
-                        5,
-                        3
-                    ],
-                    [
-                        4,
-                        3
-                    ],
-                    [
-                        3,
-                        3
-                    ]
-                ],
-                "direction": "left"
-            },
-            {
-                "id": "a3",
-                "path": [
-                    [
-                        0,
-                        5
-                    ],
-                    [
-                        0,
-                        4
-                    ],
-                    [
-                        1,
-                        4
-                    ],
-                    [
-                        1,
-                        5
-                    ]
-                ],
-                "direction": "down"
-            }
-        ]
-    },
-    {
-        "number": 4,
-        "width": 8,
-        "height": 8,
-        "seed": 92001,
-        "generatorVersion": 1,
-        "profileVersion": 1,
-        "lifeLimit": null,
-        "arrows": [
-            {
-                "id": "a0",
-                "path": [
-                    [
-                        1,
-                        4
-                    ],
-                    [
-                        1,
-                        3
-                    ],
-                    [
-                        1,
-                        2
-                    ],
-                    [
-                        0,
-                        2
-                    ],
-                    [
-                        0,
-                        1
-                    ],
-                    [
-                        0,
-                        0
-                    ],
-                    [
-                        1,
-                        0
-                    ]
-                ],
-                "direction": "right"
-            },
-            {
-                "id": "a1",
-                "path": [
-                    [
-                        2,
-                        5
-                    ],
-                    [
-                        2,
-                        6
-                    ],
-                    [
-                        2,
-                        7
-                    ],
-                    [
-                        1,
-                        7
-                    ],
-                    [
-                        1,
-                        6
-                    ],
-                    [
-                        0,
-                        6
-                    ]
-                ],
-                "direction": "left"
-            },
-            {
-                "id": "a2",
-                "path": [
-                    [
-                        5,
-                        1
-                    ],
-                    [
-                        6,
-                        1
-                    ],
-                    [
-                        6,
-                        2
-                    ],
-                    [
-                        7,
-                        2
-                    ],
-                    [
-                        7,
-                        3
-                    ],
-                    [
-                        7,
-                        4
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a3",
-                "path": [
-                    [
-                        2,
-                        1
-                    ],
-                    [
-                        2,
-                        0
-                    ],
-                    [
-                        3,
-                        0
-                    ],
-                    [
-                        3,
-                        1
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a4",
-                "path": [
-                    [
-                        7,
-                        5
-                    ],
-                    [
-                        6,
-                        5
-                    ],
-                    [
-                        5,
-                        5
-                    ],
-                    [
-                        4,
-                        5
-                    ],
-                    [
-                        3,
-                        5
-                    ],
-                    [
-                        3,
-                        6
-                    ],
-                    [
-                        4,
-                        6
-                    ],
-                    [
-                        4,
-                        7
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a5",
-                "path": [
-                    [
-                        3,
-                        2
-                    ],
-                    [
-                        4,
-                        2
-                    ],
-                    [
-                        4,
-                        1
-                    ],
-                    [
-                        4,
-                        0
-                    ],
-                    [
-                        5,
-                        0
-                    ],
-                    [
-                        6,
-                        0
-                    ],
-                    [
-                        7,
-                        0
-                    ]
-                ],
-                "direction": "right"
-            }
-        ]
-    },
-    {
-        "number": 9,
-        "width": 10,
-        "height": 10,
-        "seed": 92002,
-        "generatorVersion": 1,
-        "profileVersion": 1,
-        "lifeLimit": null,
-        "arrows": [
-            {
-                "id": "a0",
-                "path": [
-                    [
-                        6,
-                        2
-                    ],
-                    [
-                        5,
-                        2
-                    ],
-                    [
-                        5,
-                        1
-                    ],
-                    [
-                        5,
-                        0
-                    ],
-                    [
-                        4,
-                        0
-                    ],
-                    [
-                        4,
-                        1
-                    ],
-                    [
-                        3,
-                        1
-                    ]
-                ],
-                "direction": "left"
-            },
-            {
-                "id": "a1",
-                "path": [
-                    [
-                        1,
-                        1
-                    ],
-                    [
-                        1,
-                        2
-                    ],
-                    [
-                        0,
-                        2
-                    ],
-                    [
-                        0,
-                        3
-                    ],
-                    [
-                        0,
-                        4
-                    ],
-                    [
-                        0,
-                        5
-                    ],
-                    [
-                        0,
-                        6
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a2",
-                "path": [
-                    [
-                        6,
-                        8
-                    ],
-                    [
-                        6,
-                        7
-                    ],
-                    [
-                        6,
-                        6
-                    ],
-                    [
-                        6,
-                        5
-                    ],
-                    [
-                        6,
-                        4
-                    ],
-                    [
-                        5,
-                        4
-                    ],
-                    [
-                        4,
-                        4
-                    ],
-                    [
-                        4,
-                        3
-                    ],
-                    [
-                        4,
-                        2
-                    ],
-                    [
-                        3,
-                        2
-                    ],
-                    [
-                        3,
-                        3
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a3",
-                "path": [
-                    [
-                        0,
-                        7
-                    ],
-                    [
-                        0,
-                        8
-                    ],
-                    [
-                        0,
-                        9
-                    ],
-                    [
-                        1,
-                        9
-                    ],
-                    [
-                        1,
-                        8
-                    ],
-                    [
-                        1,
-                        7
-                    ],
-                    [
-                        1,
-                        6
-                    ],
-                    [
-                        1,
-                        5
-                    ],
-                    [
-                        1,
-                        4
-                    ],
-                    [
-                        1,
-                        3
-                    ],
-                    [
-                        2,
-                        3
-                    ],
-                    [
-                        2,
-                        2
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a4",
-                "path": [
-                    [
-                        3,
-                        8
-                    ],
-                    [
-                        3,
-                        7
-                    ],
-                    [
-                        3,
-                        6
-                    ],
-                    [
-                        4,
-                        6
-                    ],
-                    [
-                        4,
-                        5
-                    ],
-                    [
-                        5,
-                        5
-                    ],
-                    [
-                        5,
-                        6
-                    ],
-                    [
-                        5,
-                        7
-                    ],
-                    [
-                        5,
-                        8
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a5",
-                "path": [
-                    [
-                        7,
-                        0
-                    ],
-                    [
-                        8,
-                        0
-                    ],
-                    [
-                        9,
-                        0
-                    ],
-                    [
-                        9,
-                        1
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a6",
-                "path": [
-                    [
-                        2,
-                        4
-                    ],
-                    [
-                        2,
-                        5
-                    ],
-                    [
-                        2,
-                        6
-                    ],
-                    [
-                        2,
-                        7
-                    ],
-                    [
-                        2,
-                        8
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a7",
-                "path": [
-                    [
-                        2,
-                        9
-                    ],
-                    [
-                        3,
-                        9
-                    ],
-                    [
-                        4,
-                        9
-                    ],
-                    [
-                        5,
-                        9
-                    ],
-                    [
-                        6,
-                        9
-                    ],
-                    [
-                        7,
-                        9
-                    ]
-                ],
-                "direction": "right"
-            },
-            {
-                "id": "a8",
-                "path": [
-                    [
-                        3,
-                        0
-                    ],
-                    [
-                        2,
-                        0
-                    ]
-                ],
-                "direction": "left"
-            },
-            {
-                "id": "a9",
-                "path": [
-                    [
-                        5,
-                        3
-                    ],
-                    [
-                        6,
-                        3
-                    ]
-                ],
-                "direction": "right"
-            },
-            {
-                "id": "a10",
-                "path": [
-                    [
-                        7,
-                        8
-                    ],
-                    [
-                        8,
-                        8
-                    ]
-                ],
-                "direction": "right"
-            }
-        ]
-    },
-    {
-        "number": 16,
-        "width": 12,
-        "height": 12,
-        "seed": 92003,
-        "generatorVersion": 1,
-        "profileVersion": 1,
-        "lifeLimit": null,
-        "arrows": [
-            {
-                "id": "a0",
-                "path": [
-                    [
-                        9,
-                        1
-                    ],
-                    [
-                        9,
-                        2
-                    ],
-                    [
-                        9,
-                        3
-                    ],
-                    [
-                        9,
-                        4
-                    ],
-                    [
-                        9,
-                        5
-                    ],
-                    [
-                        9,
-                        6
-                    ],
-                    [
-                        9,
-                        7
-                    ],
-                    [
-                        9,
-                        8
-                    ],
-                    [
-                        9,
-                        9
-                    ],
-                    [
-                        10,
-                        9
-                    ],
-                    [
-                        11,
-                        9
-                    ],
-                    [
-                        11,
-                        10
-                    ],
-                    [
-                        11,
-                        11
-                    ],
-                    [
-                        10,
-                        11
-                    ],
-                    [
-                        10,
-                        10
-                    ],
-                    [
-                        9,
-                        10
-                    ]
-                ],
-                "direction": "left"
-            },
-            {
-                "id": "a1",
-                "path": [
-                    [
-                        11,
-                        1
-                    ],
-                    [
-                        11,
-                        0
-                    ],
-                    [
-                        10,
-                        0
-                    ],
-                    [
-                        9,
-                        0
-                    ],
-                    [
-                        8,
-                        0
-                    ],
-                    [
-                        8,
-                        1
-                    ],
-                    [
-                        8,
-                        2
-                    ],
-                    [
-                        7,
-                        2
-                    ],
-                    [
-                        7,
-                        3
-                    ],
-                    [
-                        7,
-                        4
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a2",
-                "path": [
-                    [
-                        2,
-                        2
-                    ],
-                    [
-                        2,
-                        3
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a3",
-                "path": [
-                    [
-                        4,
-                        9
-                    ],
-                    [
-                        3,
-                        9
-                    ],
-                    [
-                        2,
-                        9
-                    ],
-                    [
-                        1,
-                        9
-                    ],
-                    [
-                        1,
-                        8
-                    ],
-                    [
-                        2,
-                        8
-                    ],
-                    [
-                        3,
-                        8
-                    ],
-                    [
-                        3,
-                        7
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a4",
-                "path": [
-                    [
-                        8,
-                        3
-                    ],
-                    [
-                        8,
-                        4
-                    ],
-                    [
-                        8,
-                        5
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a5",
-                "path": [
-                    [
-                        0,
-                        5
-                    ],
-                    [
-                        0,
-                        6
-                    ],
-                    [
-                        0,
-                        7
-                    ],
-                    [
-                        0,
-                        8
-                    ],
-                    [
-                        0,
-                        9
-                    ],
-                    [
-                        0,
-                        10
-                    ],
-                    [
-                        1,
-                        10
-                    ],
-                    [
-                        2,
-                        10
-                    ],
-                    [
-                        2,
-                        11
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a6",
-                "path": [
-                    [
-                        4,
-                        0
-                    ],
-                    [
-                        4,
-                        1
-                    ],
-                    [
-                        4,
-                        2
-                    ],
-                    [
-                        3,
-                        2
-                    ],
-                    [
-                        3,
-                        3
-                    ],
-                    [
-                        4,
-                        3
-                    ],
-                    [
-                        5,
-                        3
-                    ],
-                    [
-                        5,
-                        4
-                    ],
-                    [
-                        4,
-                        4
-                    ]
-                ],
-                "direction": "left"
-            },
-            {
-                "id": "a7",
-                "path": [
-                    [
-                        8,
-                        6
-                    ],
-                    [
-                        7,
-                        6
-                    ],
-                    [
-                        6,
-                        6
-                    ],
-                    [
-                        6,
-                        7
-                    ],
-                    [
-                        5,
-                        7
-                    ],
-                    [
-                        5,
-                        6
-                    ],
-                    [
-                        5,
-                        5
-                    ],
-                    [
-                        6,
-                        5
-                    ],
-                    [
-                        6,
-                        4
-                    ],
-                    [
-                        6,
-                        3
-                    ],
-                    [
-                        6,
-                        2
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a8",
-                "path": [
-                    [
-                        5,
-                        9
-                    ],
-                    [
-                        6,
-                        9
-                    ],
-                    [
-                        6,
-                        10
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a9",
-                "path": [
-                    [
-                        10,
-                        8
-                    ],
-                    [
-                        10,
-                        7
-                    ],
-                    [
-                        10,
-                        6
-                    ],
-                    [
-                        11,
-                        6
-                    ],
-                    [
-                        11,
-                        5
-                    ],
-                    [
-                        10,
-                        5
-                    ],
-                    [
-                        10,
-                        4
-                    ],
-                    [
-                        11,
-                        4
-                    ]
-                ],
-                "direction": "right"
-            },
-            {
-                "id": "a10",
-                "path": [
-                    [
-                        5,
-                        2
-                    ],
-                    [
-                        5,
-                        1
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a11",
-                "path": [
-                    [
-                        1,
-                        5
-                    ],
-                    [
-                        1,
-                        6
-                    ],
-                    [
-                        2,
-                        6
-                    ],
-                    [
-                        3,
-                        6
-                    ],
-                    [
-                        4,
-                        6
-                    ],
-                    [
-                        4,
-                        7
-                    ],
-                    [
-                        4,
-                        8
-                    ],
-                    [
-                        5,
-                        8
-                    ],
-                    [
-                        6,
-                        8
-                    ],
-                    [
-                        7,
-                        8
-                    ],
-                    [
-                        7,
-                        9
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a12",
-                "path": [
-                    [
-                        2,
-                        1
-                    ],
-                    [
-                        3,
-                        1
-                    ],
-                    [
-                        3,
-                        0
-                    ],
-                    [
-                        2,
-                        0
-                    ],
-                    [
-                        1,
-                        0
-                    ],
-                    [
-                        1,
-                        1
-                    ],
-                    [
-                        0,
-                        1
-                    ],
-                    [
-                        0,
-                        0
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a13",
-                "path": [
-                    [
-                        5,
-                        0
-                    ],
-                    [
-                        6,
-                        0
-                    ],
-                    [
-                        6,
-                        1
-                    ],
-                    [
-                        7,
-                        1
-                    ],
-                    [
-                        7,
-                        0
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a14",
-                "path": [
-                    [
-                        3,
-                        10
-                    ],
-                    [
-                        4,
-                        10
-                    ],
-                    [
-                        5,
-                        10
-                    ],
-                    [
-                        5,
-                        11
-                    ],
-                    [
-                        6,
-                        11
-                    ],
-                    [
-                        7,
-                        11
-                    ],
-                    [
-                        7,
-                        10
-                    ],
-                    [
-                        8,
-                        10
-                    ],
-                    [
-                        8,
-                        11
-                    ]
-                ],
-                "direction": "down"
-            }
-        ]
-    },
-    {
-        "number": 21,
-        "width": 12,
-        "height": 12,
-        "seed": 92004,
-        "generatorVersion": 1,
-        "profileVersion": 1,
-        "lifeLimit": 3,
-        "arrows": [
-            {
-                "id": "a0",
-                "path": [
-                    [
-                        3,
-                        0
-                    ],
-                    [
-                        4,
-                        0
-                    ],
-                    [
-                        4,
-                        1
-                    ],
-                    [
-                        5,
-                        1
-                    ],
-                    [
-                        5,
-                        2
-                    ],
-                    [
-                        5,
-                        3
-                    ],
-                    [
-                        6,
-                        3
-                    ],
-                    [
-                        6,
-                        2
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a1",
-                "path": [
-                    [
-                        1,
-                        8
-                    ],
-                    [
-                        1,
-                        7
-                    ],
-                    [
-                        1,
-                        6
-                    ],
-                    [
-                        1,
-                        5
-                    ],
-                    [
-                        2,
-                        5
-                    ],
-                    [
-                        2,
-                        4
-                    ],
-                    [
-                        2,
-                        3
-                    ],
-                    [
-                        1,
-                        3
-                    ],
-                    [
-                        0,
-                        3
-                    ],
-                    [
-                        0,
-                        2
-                    ],
-                    [
-                        1,
-                        2
-                    ],
-                    [
-                        1,
-                        1
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a2",
-                "path": [
-                    [
-                        11,
-                        11
-                    ],
-                    [
-                        11,
-                        10
-                    ],
-                    [
-                        11,
-                        9
-                    ],
-                    [
-                        11,
-                        8
-                    ],
-                    [
-                        11,
-                        7
-                    ],
-                    [
-                        11,
-                        6
-                    ],
-                    [
-                        11,
-                        5
-                    ],
-                    [
-                        11,
-                        4
-                    ],
-                    [
-                        11,
-                        3
-                    ],
-                    [
-                        11,
-                        2
-                    ],
-                    [
-                        11,
-                        1
-                    ],
-                    [
-                        11,
-                        0
-                    ],
-                    [
-                        10,
-                        0
-                    ],
-                    [
-                        10,
-                        1
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a3",
-                "path": [
-                    [
-                        9,
-                        0
-                    ],
-                    [
-                        9,
-                        1
-                    ],
-                    [
-                        9,
-                        2
-                    ],
-                    [
-                        8,
-                        2
-                    ],
-                    [
-                        8,
-                        3
-                    ],
-                    [
-                        8,
-                        4
-                    ],
-                    [
-                        9,
-                        4
-                    ],
-                    [
-                        9,
-                        3
-                    ],
-                    [
-                        10,
-                        3
-                    ],
-                    [
-                        10,
-                        4
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a4",
-                "path": [
-                    [
-                        0,
-                        1
-                    ],
-                    [
-                        0,
-                        0
-                    ],
-                    [
-                        1,
-                        0
-                    ],
-                    [
-                        2,
-                        0
-                    ],
-                    [
-                        2,
-                        1
-                    ],
-                    [
-                        2,
-                        2
-                    ],
-                    [
-                        3,
-                        2
-                    ],
-                    [
-                        3,
-                        3
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a5",
-                "path": [
-                    [
-                        10,
-                        11
-                    ],
-                    [
-                        10,
-                        10
-                    ],
-                    [
-                        9,
-                        10
-                    ],
-                    [
-                        8,
-                        10
-                    ],
-                    [
-                        7,
-                        10
-                    ],
-                    [
-                        7,
-                        11
-                    ],
-                    [
-                        6,
-                        11
-                    ],
-                    [
-                        5,
-                        11
-                    ],
-                    [
-                        4,
-                        11
-                    ],
-                    [
-                        4,
-                        10
-                    ],
-                    [
-                        4,
-                        9
-                    ],
-                    [
-                        3,
-                        9
-                    ],
-                    [
-                        2,
-                        9
-                    ],
-                    [
-                        2,
-                        10
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a6",
-                "path": [
-                    [
-                        3,
-                        10
-                    ],
-                    [
-                        3,
-                        11
-                    ],
-                    [
-                        2,
-                        11
-                    ],
-                    [
-                        1,
-                        11
-                    ],
-                    [
-                        1,
-                        10
-                    ],
-                    [
-                        1,
-                        9
-                    ],
-                    [
-                        0,
-                        9
-                    ]
-                ],
-                "direction": "left"
-            },
-            {
-                "id": "a7",
-                "path": [
-                    [
-                        0,
-                        10
-                    ],
-                    [
-                        0,
-                        11
-                    ]
-                ],
-                "direction": "down"
-            },
-            {
-                "id": "a8",
-                "path": [
-                    [
-                        3,
-                        6
-                    ],
-                    [
-                        4,
-                        6
-                    ],
-                    [
-                        4,
-                        7
-                    ],
-                    [
-                        4,
-                        8
-                    ],
-                    [
-                        5,
-                        8
-                    ],
-                    [
-                        6,
-                        8
-                    ],
-                    [
-                        7,
-                        8
-                    ],
-                    [
-                        7,
-                        7
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a9",
-                "path": [
-                    [
-                        1,
-                        4
-                    ],
-                    [
-                        0,
-                        4
-                    ]
-                ],
-                "direction": "left"
-            },
-            {
-                "id": "a10",
-                "path": [
-                    [
-                        10,
-                        5
-                    ],
-                    [
-                        10,
-                        6
-                    ],
-                    [
-                        9,
-                        6
-                    ],
-                    [
-                        9,
-                        5
-                    ],
-                    [
-                        8,
-                        5
-                    ],
-                    [
-                        8,
-                        6
-                    ],
-                    [
-                        7,
-                        6
-                    ],
-                    [
-                        7,
-                        5
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a11",
-                "path": [
-                    [
-                        3,
-                        5
-                    ],
-                    [
-                        4,
-                        5
-                    ],
-                    [
-                        5,
-                        5
-                    ],
-                    [
-                        5,
-                        6
-                    ],
-                    [
-                        5,
-                        7
-                    ],
-                    [
-                        6,
-                        7
-                    ],
-                    [
-                        6,
-                        6
-                    ],
-                    [
-                        6,
-                        5
-                    ],
-                    [
-                        6,
-                        4
-                    ],
-                    [
-                        7,
-                        4
-                    ],
-                    [
-                        7,
-                        3
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a12",
-                "path": [
-                    [
-                        5,
-                        0
-                    ],
-                    [
-                        6,
-                        0
-                    ],
-                    [
-                        6,
-                        1
-                    ],
-                    [
-                        7,
-                        1
-                    ],
-                    [
-                        7,
-                        0
-                    ]
-                ],
-                "direction": "up"
-            },
-            {
-                "id": "a13",
-                "path": [
-                    [
-                        8,
-                        1
-                    ],
-                    [
-                        8,
-                        0
-                    ]
-                ],
-                "direction": "up"
-            }
-        ]
-    }
+module.exports=[
+  {
+    "number": 1,
+    "width": 6,
+    "height": 6,
+    "seed": 92001,
+    "generatorVersion": 4,
+    "profileVersion": 8,
+    "lifeLimit": null,
+    "arrows": [
+      {
+        "id": "a0",
+        "path": [
+          [
+            5,
+            2
+          ],
+          [
+            4,
+            2
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a1",
+        "path": [
+          [
+            2,
+            2
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            0
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a2",
+        "path": [
+          [
+            1,
+            3
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            2,
+            4
+          ],
+          [
+            2,
+            5
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a3",
+        "path": [
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            4
+          ],
+          [
+            4,
+            4
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            3,
+            3
+          ]
+        ],
+        "direction": "up"
+      }
+    ],
+    "timeLimitMs": null,
+    "obstacles": []
+  },
+  {
+    "number": 2,
+    "width": 8,
+    "height": 8,
+    "seed": 92002,
+    "generatorVersion": 4,
+    "profileVersion": 8,
+    "lifeLimit": null,
+    "arrows": [
+      {
+        "id": "a0",
+        "path": [
+          [
+            4,
+            1
+          ],
+          [
+            4,
+            0
+          ],
+          [
+            3,
+            0
+          ],
+          [
+            3,
+            1
+          ],
+          [
+            2,
+            1
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a1",
+        "path": [
+          [
+            2,
+            0
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            3
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a2",
+        "path": [
+          [
+            7,
+            1
+          ],
+          [
+            7,
+            2
+          ],
+          [
+            7,
+            3
+          ],
+          [
+            7,
+            4
+          ],
+          [
+            7,
+            5
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a3",
+        "path": [
+          [
+            7,
+            0
+          ],
+          [
+            6,
+            0
+          ],
+          [
+            6,
+            1
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a4",
+        "path": [
+          [
+            1,
+            4
+          ],
+          [
+            2,
+            4
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            2,
+            5
+          ],
+          [
+            1,
+            5
+          ],
+          [
+            0,
+            5
+          ],
+          [
+            0,
+            6
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a5",
+        "path": [
+          [
+            1,
+            7
+          ],
+          [
+            1,
+            6
+          ],
+          [
+            2,
+            6
+          ],
+          [
+            2,
+            7
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a6",
+        "path": [
+          [
+            4,
+            4
+          ],
+          [
+            5,
+            4
+          ],
+          [
+            5,
+            3
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a7",
+        "path": [
+          [
+            5,
+            2
+          ],
+          [
+            6,
+            2
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            6,
+            4
+          ],
+          [
+            6,
+            5
+          ]
+        ],
+        "direction": "down"
+      }
+    ],
+    "timeLimitMs": null,
+    "obstacles": []
+  },
+  {
+    "number": 9,
+    "width": 10,
+    "height": 10,
+    "seed": 92002,
+    "generatorVersion": 1,
+    "profileVersion": 1,
+    "lifeLimit": null,
+    "arrows": [
+      {
+        "id": "a0",
+        "path": [
+          [
+            6,
+            2
+          ],
+          [
+            5,
+            2
+          ],
+          [
+            5,
+            1
+          ],
+          [
+            5,
+            0
+          ],
+          [
+            4,
+            0
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            3,
+            1
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a1",
+        "path": [
+          [
+            1,
+            1
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            4
+          ],
+          [
+            0,
+            5
+          ],
+          [
+            0,
+            6
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a2",
+        "path": [
+          [
+            6,
+            8
+          ],
+          [
+            6,
+            7
+          ],
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            5
+          ],
+          [
+            6,
+            4
+          ],
+          [
+            5,
+            4
+          ],
+          [
+            4,
+            4
+          ],
+          [
+            4,
+            3
+          ],
+          [
+            4,
+            2
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            3,
+            3
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a3",
+        "path": [
+          [
+            0,
+            7
+          ],
+          [
+            0,
+            8
+          ],
+          [
+            0,
+            9
+          ],
+          [
+            1,
+            9
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            1,
+            7
+          ],
+          [
+            1,
+            6
+          ],
+          [
+            1,
+            5
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            2,
+            2
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a4",
+        "path": [
+          [
+            3,
+            8
+          ],
+          [
+            3,
+            7
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            4,
+            6
+          ],
+          [
+            4,
+            5
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            5,
+            7
+          ],
+          [
+            5,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a5",
+        "path": [
+          [
+            7,
+            0
+          ],
+          [
+            8,
+            0
+          ],
+          [
+            9,
+            0
+          ],
+          [
+            9,
+            1
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a6",
+        "path": [
+          [
+            2,
+            4
+          ],
+          [
+            2,
+            5
+          ],
+          [
+            2,
+            6
+          ],
+          [
+            2,
+            7
+          ],
+          [
+            2,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a7",
+        "path": [
+          [
+            2,
+            9
+          ],
+          [
+            3,
+            9
+          ],
+          [
+            4,
+            9
+          ],
+          [
+            5,
+            9
+          ],
+          [
+            6,
+            9
+          ],
+          [
+            7,
+            9
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a8",
+        "path": [
+          [
+            3,
+            0
+          ],
+          [
+            2,
+            0
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a9",
+        "path": [
+          [
+            5,
+            3
+          ],
+          [
+            6,
+            3
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a10",
+        "path": [
+          [
+            7,
+            8
+          ],
+          [
+            8,
+            8
+          ]
+        ],
+        "direction": "right"
+      }
+    ]
+  },
+  {
+    "number": 16,
+    "width": 12,
+    "height": 12,
+    "seed": 92003,
+    "generatorVersion": 1,
+    "profileVersion": 1,
+    "lifeLimit": null,
+    "arrows": [
+      {
+        "id": "a0",
+        "path": [
+          [
+            9,
+            1
+          ],
+          [
+            9,
+            2
+          ],
+          [
+            9,
+            3
+          ],
+          [
+            9,
+            4
+          ],
+          [
+            9,
+            5
+          ],
+          [
+            9,
+            6
+          ],
+          [
+            9,
+            7
+          ],
+          [
+            9,
+            8
+          ],
+          [
+            9,
+            9
+          ],
+          [
+            10,
+            9
+          ],
+          [
+            11,
+            9
+          ],
+          [
+            11,
+            10
+          ],
+          [
+            11,
+            11
+          ],
+          [
+            10,
+            11
+          ],
+          [
+            10,
+            10
+          ],
+          [
+            9,
+            10
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a1",
+        "path": [
+          [
+            11,
+            1
+          ],
+          [
+            11,
+            0
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            9,
+            0
+          ],
+          [
+            8,
+            0
+          ],
+          [
+            8,
+            1
+          ],
+          [
+            8,
+            2
+          ],
+          [
+            7,
+            2
+          ],
+          [
+            7,
+            3
+          ],
+          [
+            7,
+            4
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a2",
+        "path": [
+          [
+            2,
+            2
+          ],
+          [
+            2,
+            3
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a3",
+        "path": [
+          [
+            4,
+            9
+          ],
+          [
+            3,
+            9
+          ],
+          [
+            2,
+            9
+          ],
+          [
+            1,
+            9
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            2,
+            8
+          ],
+          [
+            3,
+            8
+          ],
+          [
+            3,
+            7
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a4",
+        "path": [
+          [
+            8,
+            3
+          ],
+          [
+            8,
+            4
+          ],
+          [
+            8,
+            5
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a5",
+        "path": [
+          [
+            0,
+            5
+          ],
+          [
+            0,
+            6
+          ],
+          [
+            0,
+            7
+          ],
+          [
+            0,
+            8
+          ],
+          [
+            0,
+            9
+          ],
+          [
+            0,
+            10
+          ],
+          [
+            1,
+            10
+          ],
+          [
+            2,
+            10
+          ],
+          [
+            2,
+            11
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a6",
+        "path": [
+          [
+            4,
+            0
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            4,
+            2
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            3,
+            3
+          ],
+          [
+            4,
+            3
+          ],
+          [
+            5,
+            3
+          ],
+          [
+            5,
+            4
+          ],
+          [
+            4,
+            4
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a7",
+        "path": [
+          [
+            8,
+            6
+          ],
+          [
+            7,
+            6
+          ],
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            7
+          ],
+          [
+            5,
+            7
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            6,
+            5
+          ],
+          [
+            6,
+            4
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            6,
+            2
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a8",
+        "path": [
+          [
+            5,
+            9
+          ],
+          [
+            6,
+            9
+          ],
+          [
+            6,
+            10
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a9",
+        "path": [
+          [
+            10,
+            8
+          ],
+          [
+            10,
+            7
+          ],
+          [
+            10,
+            6
+          ],
+          [
+            11,
+            6
+          ],
+          [
+            11,
+            5
+          ],
+          [
+            10,
+            5
+          ],
+          [
+            10,
+            4
+          ],
+          [
+            11,
+            4
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a10",
+        "path": [
+          [
+            5,
+            2
+          ],
+          [
+            5,
+            1
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a11",
+        "path": [
+          [
+            1,
+            5
+          ],
+          [
+            1,
+            6
+          ],
+          [
+            2,
+            6
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            4,
+            6
+          ],
+          [
+            4,
+            7
+          ],
+          [
+            4,
+            8
+          ],
+          [
+            5,
+            8
+          ],
+          [
+            6,
+            8
+          ],
+          [
+            7,
+            8
+          ],
+          [
+            7,
+            9
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a12",
+        "path": [
+          [
+            2,
+            1
+          ],
+          [
+            3,
+            1
+          ],
+          [
+            3,
+            0
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            1
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a13",
+        "path": [
+          [
+            5,
+            0
+          ],
+          [
+            6,
+            0
+          ],
+          [
+            6,
+            1
+          ],
+          [
+            7,
+            1
+          ],
+          [
+            7,
+            0
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a14",
+        "path": [
+          [
+            3,
+            10
+          ],
+          [
+            4,
+            10
+          ],
+          [
+            5,
+            10
+          ],
+          [
+            5,
+            11
+          ],
+          [
+            6,
+            11
+          ],
+          [
+            7,
+            11
+          ],
+          [
+            7,
+            10
+          ],
+          [
+            8,
+            10
+          ],
+          [
+            8,
+            11
+          ]
+        ],
+        "direction": "down"
+      }
+    ]
+  },
+  {
+    "number": 3,
+    "width": 14,
+    "height": 14,
+    "seed": 92003,
+    "generatorVersion": 4,
+    "profileVersion": 8,
+    "lifeLimit": 3,
+    "arrows": [
+      {
+        "id": "a0",
+        "path": [
+          [
+            10,
+            12
+          ],
+          [
+            11,
+            12
+          ],
+          [
+            11,
+            11
+          ],
+          [
+            12,
+            11
+          ],
+          [
+            13,
+            11
+          ],
+          [
+            13,
+            10
+          ],
+          [
+            12,
+            10
+          ],
+          [
+            12,
+            9
+          ],
+          [
+            13,
+            9
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a1",
+        "path": [
+          [
+            7,
+            11
+          ],
+          [
+            7,
+            12
+          ],
+          [
+            7,
+            13
+          ],
+          [
+            8,
+            13
+          ],
+          [
+            8,
+            12
+          ],
+          [
+            8,
+            11
+          ],
+          [
+            9,
+            11
+          ],
+          [
+            10,
+            11
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a2",
+        "path": [
+          [
+            10,
+            8
+          ],
+          [
+            9,
+            8
+          ],
+          [
+            9,
+            9
+          ],
+          [
+            8,
+            9
+          ],
+          [
+            7,
+            9
+          ],
+          [
+            7,
+            10
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a3",
+        "path": [
+          [
+            11,
+            5
+          ],
+          [
+            11,
+            6
+          ],
+          [
+            10,
+            6
+          ],
+          [
+            9,
+            6
+          ],
+          [
+            8,
+            6
+          ],
+          [
+            7,
+            6
+          ],
+          [
+            7,
+            7
+          ],
+          [
+            7,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a4",
+        "path": [
+          [
+            10,
+            5
+          ],
+          [
+            10,
+            4
+          ],
+          [
+            9,
+            4
+          ],
+          [
+            9,
+            5
+          ],
+          [
+            8,
+            5
+          ],
+          [
+            8,
+            4
+          ],
+          [
+            7,
+            4
+          ],
+          [
+            7,
+            5
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a5",
+        "path": [
+          [
+            3,
+            1
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            4,
+            2
+          ],
+          [
+            5,
+            2
+          ],
+          [
+            6,
+            2
+          ],
+          [
+            7,
+            2
+          ],
+          [
+            7,
+            3
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a6",
+        "path": [
+          [
+            6,
+            0
+          ],
+          [
+            7,
+            0
+          ],
+          [
+            7,
+            1
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a7",
+        "path": [
+          [
+            10,
+            10
+          ],
+          [
+            11,
+            10
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a8",
+        "path": [
+          [
+            8,
+            10
+          ],
+          [
+            9,
+            10
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a9",
+        "path": [
+          [
+            4,
+            13
+          ],
+          [
+            4,
+            12
+          ],
+          [
+            4,
+            11
+          ],
+          [
+            5,
+            11
+          ],
+          [
+            5,
+            10
+          ],
+          [
+            6,
+            10
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a10",
+        "path": [
+          [
+            4,
+            9
+          ],
+          [
+            3,
+            9
+          ],
+          [
+            2,
+            9
+          ],
+          [
+            2,
+            10
+          ],
+          [
+            3,
+            10
+          ],
+          [
+            4,
+            10
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a11",
+        "path": [
+          [
+            2,
+            8
+          ],
+          [
+            2,
+            7
+          ],
+          [
+            2,
+            6
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            4,
+            6
+          ],
+          [
+            4,
+            7
+          ],
+          [
+            4,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a12",
+        "path": [
+          [
+            5,
+            4
+          ],
+          [
+            4,
+            4
+          ],
+          [
+            4,
+            5
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a13",
+        "path": [
+          [
+            0,
+            8
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            1,
+            9
+          ],
+          [
+            0,
+            9
+          ],
+          [
+            0,
+            10
+          ],
+          [
+            1,
+            10
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a14",
+        "path": [
+          [
+            6,
+            8
+          ],
+          [
+            6,
+            9
+          ],
+          [
+            5,
+            9
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a15",
+        "path": [
+          [
+            12,
+            7
+          ],
+          [
+            12,
+            8
+          ],
+          [
+            11,
+            8
+          ],
+          [
+            11,
+            9
+          ],
+          [
+            10,
+            9
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a16",
+        "path": [
+          [
+            9,
+            7
+          ],
+          [
+            8,
+            7
+          ],
+          [
+            8,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a17",
+        "path": [
+          [
+            11,
+            0
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            9,
+            0
+          ],
+          [
+            8,
+            0
+          ],
+          [
+            8,
+            1
+          ],
+          [
+            8,
+            2
+          ],
+          [
+            8,
+            3
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a18",
+        "path": [
+          [
+            10,
+            2
+          ],
+          [
+            10,
+            3
+          ],
+          [
+            9,
+            3
+          ],
+          [
+            9,
+            2
+          ],
+          [
+            9,
+            1
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a19",
+        "path": [
+          [
+            13,
+            13
+          ],
+          [
+            13,
+            12
+          ],
+          [
+            12,
+            12
+          ],
+          [
+            12,
+            13
+          ],
+          [
+            11,
+            13
+          ],
+          [
+            10,
+            13
+          ],
+          [
+            9,
+            13
+          ],
+          [
+            9,
+            12
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a20",
+        "path": [
+          [
+            6,
+            11
+          ],
+          [
+            6,
+            12
+          ],
+          [
+            5,
+            12
+          ],
+          [
+            5,
+            13
+          ],
+          [
+            6,
+            13
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a21",
+        "path": [
+          [
+            5,
+            6
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            6,
+            5
+          ],
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            7
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a22",
+        "path": [
+          [
+            2,
+            3
+          ],
+          [
+            3,
+            3
+          ],
+          [
+            4,
+            3
+          ],
+          [
+            5,
+            3
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            6,
+            4
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a23",
+        "path": [
+          [
+            13,
+            4
+          ],
+          [
+            13,
+            5
+          ],
+          [
+            13,
+            6
+          ],
+          [
+            13,
+            7
+          ],
+          [
+            13,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a24",
+        "path": [
+          [
+            11,
+            4
+          ],
+          [
+            12,
+            4
+          ],
+          [
+            12,
+            3
+          ],
+          [
+            12,
+            2
+          ],
+          [
+            13,
+            2
+          ],
+          [
+            13,
+            3
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a25",
+        "path": [
+          [
+            10,
+            1
+          ],
+          [
+            11,
+            1
+          ],
+          [
+            12,
+            1
+          ],
+          [
+            12,
+            0
+          ],
+          [
+            13,
+            0
+          ],
+          [
+            13,
+            1
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a26",
+        "path": [
+          [
+            11,
+            3
+          ],
+          [
+            11,
+            2
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a27",
+        "path": [
+          [
+            2,
+            5
+          ],
+          [
+            2,
+            4
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            0,
+            4
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            3
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a28",
+        "path": [
+          [
+            0,
+            2
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            1,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            3,
+            0
+          ],
+          [
+            4,
+            0
+          ],
+          [
+            5,
+            0
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a29",
+        "path": [
+          [
+            3,
+            2
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            2,
+            1
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a30",
+        "path": [
+          [
+            2,
+            13
+          ],
+          [
+            2,
+            12
+          ],
+          [
+            2,
+            11
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a31",
+        "path": [
+          [
+            12,
+            6
+          ],
+          [
+            12,
+            5
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a32",
+        "path": [
+          [
+            1,
+            5
+          ],
+          [
+            0,
+            5
+          ],
+          [
+            0,
+            6
+          ],
+          [
+            1,
+            6
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a33",
+        "path": [
+          [
+            5,
+            7
+          ],
+          [
+            5,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a34",
+        "path": [
+          [
+            10,
+            7
+          ],
+          [
+            11,
+            7
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a35",
+        "path": [
+          [
+            3,
+            5
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a36",
+        "path": [
+          [
+            3,
+            8
+          ],
+          [
+            3,
+            7
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a37",
+        "path": [
+          [
+            3,
+            13
+          ],
+          [
+            3,
+            12
+          ],
+          [
+            3,
+            11
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a38",
+        "path": [
+          [
+            0,
+            13
+          ],
+          [
+            0,
+            12
+          ],
+          [
+            0,
+            11
+          ],
+          [
+            1,
+            11
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a39",
+        "path": [
+          [
+            5,
+            1
+          ],
+          [
+            6,
+            1
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a40",
+        "path": [
+          [
+            0,
+            7
+          ],
+          [
+            1,
+            7
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a41",
+        "path": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a42",
+        "path": [
+          [
+            1,
+            13
+          ],
+          [
+            1,
+            12
+          ]
+        ],
+        "direction": "up"
+      }
+    ],
+    "timeLimitMs": null,
+    "obstacles": []
+  },
+  {
+    "number": 8,
+    "width": 16,
+    "height": 16,
+    "seed": 92008,
+    "generatorVersion": 4,
+    "profileVersion": 8,
+    "lifeLimit": 3,
+    "arrows": [
+      {
+        "id": "a0",
+        "path": [
+          [
+            15,
+            15
+          ],
+          [
+            15,
+            14
+          ],
+          [
+            15,
+            13
+          ],
+          [
+            14,
+            13
+          ],
+          [
+            14,
+            12
+          ],
+          [
+            15,
+            12
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a1",
+        "path": [
+          [
+            10,
+            13
+          ],
+          [
+            10,
+            14
+          ],
+          [
+            10,
+            15
+          ],
+          [
+            11,
+            15
+          ],
+          [
+            11,
+            14
+          ],
+          [
+            12,
+            14
+          ],
+          [
+            12,
+            15
+          ],
+          [
+            13,
+            15
+          ],
+          [
+            14,
+            15
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a2",
+        "path": [
+          [
+            12,
+            12
+          ],
+          [
+            12,
+            13
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a3",
+        "path": [
+          [
+            11,
+            10
+          ],
+          [
+            11,
+            9
+          ],
+          [
+            12,
+            9
+          ],
+          [
+            12,
+            10
+          ],
+          [
+            12,
+            11
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a4",
+        "path": [
+          [
+            14,
+            6
+          ],
+          [
+            13,
+            6
+          ],
+          [
+            12,
+            6
+          ],
+          [
+            12,
+            7
+          ],
+          [
+            12,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a5",
+        "path": [
+          [
+            15,
+            1
+          ],
+          [
+            15,
+            2
+          ],
+          [
+            15,
+            3
+          ],
+          [
+            15,
+            4
+          ],
+          [
+            14,
+            4
+          ],
+          [
+            13,
+            4
+          ],
+          [
+            12,
+            4
+          ],
+          [
+            12,
+            5
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a6",
+        "path": [
+          [
+            14,
+            1
+          ],
+          [
+            14,
+            2
+          ],
+          [
+            13,
+            2
+          ],
+          [
+            13,
+            3
+          ],
+          [
+            14,
+            3
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a7",
+        "path": [
+          [
+            9,
+            3
+          ],
+          [
+            10,
+            3
+          ],
+          [
+            11,
+            3
+          ],
+          [
+            12,
+            3
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a8",
+        "path": [
+          [
+            7,
+            0
+          ],
+          [
+            7,
+            1
+          ],
+          [
+            7,
+            2
+          ],
+          [
+            7,
+            3
+          ],
+          [
+            8,
+            3
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a9",
+        "path": [
+          [
+            8,
+            6
+          ],
+          [
+            7,
+            6
+          ],
+          [
+            7,
+            5
+          ],
+          [
+            7,
+            4
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a10",
+        "path": [
+          [
+            9,
+            8
+          ],
+          [
+            8,
+            8
+          ],
+          [
+            7,
+            8
+          ],
+          [
+            7,
+            7
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a11",
+        "path": [
+          [
+            6,
+            10
+          ],
+          [
+            7,
+            10
+          ],
+          [
+            7,
+            9
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a12",
+        "path": [
+          [
+            9,
+            10
+          ],
+          [
+            9,
+            11
+          ],
+          [
+            8,
+            11
+          ],
+          [
+            8,
+            12
+          ],
+          [
+            7,
+            12
+          ],
+          [
+            7,
+            11
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a13",
+        "path": [
+          [
+            9,
+            14
+          ],
+          [
+            8,
+            14
+          ],
+          [
+            7,
+            14
+          ],
+          [
+            7,
+            13
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a14",
+        "path": [
+          [
+            6,
+            13
+          ],
+          [
+            6,
+            14
+          ],
+          [
+            6,
+            15
+          ],
+          [
+            7,
+            15
+          ],
+          [
+            8,
+            15
+          ],
+          [
+            9,
+            15
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a15",
+        "path": [
+          [
+            4,
+            14
+          ],
+          [
+            4,
+            15
+          ],
+          [
+            5,
+            15
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a16",
+        "path": [
+          [
+            4,
+            9
+          ],
+          [
+            5,
+            9
+          ],
+          [
+            5,
+            10
+          ],
+          [
+            5,
+            11
+          ],
+          [
+            4,
+            11
+          ],
+          [
+            4,
+            12
+          ],
+          [
+            4,
+            13
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a17",
+        "path": [
+          [
+            9,
+            0
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            10,
+            1
+          ],
+          [
+            11,
+            1
+          ],
+          [
+            11,
+            0
+          ],
+          [
+            12,
+            0
+          ],
+          [
+            12,
+            1
+          ],
+          [
+            13,
+            1
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a18",
+        "path": [
+          [
+            10,
+            2
+          ],
+          [
+            9,
+            2
+          ],
+          [
+            9,
+            1
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a19",
+        "path": [
+          [
+            9,
+            4
+          ],
+          [
+            8,
+            4
+          ],
+          [
+            8,
+            5
+          ],
+          [
+            9,
+            5
+          ],
+          [
+            10,
+            5
+          ],
+          [
+            10,
+            4
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a20",
+        "path": [
+          [
+            10,
+            7
+          ],
+          [
+            10,
+            6
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a21",
+        "path": [
+          [
+            11,
+            11
+          ],
+          [
+            10,
+            11
+          ],
+          [
+            10,
+            10
+          ],
+          [
+            10,
+            9
+          ],
+          [
+            10,
+            8
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a22",
+        "path": [
+          [
+            8,
+            7
+          ],
+          [
+            9,
+            7
+          ],
+          [
+            9,
+            6
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a23",
+        "path": [
+          [
+            6,
+            11
+          ],
+          [
+            6,
+            12
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a24",
+        "path": [
+          [
+            5,
+            7
+          ],
+          [
+            6,
+            7
+          ],
+          [
+            6,
+            8
+          ],
+          [
+            6,
+            9
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a25",
+        "path": [
+          [
+            6,
+            0
+          ],
+          [
+            6,
+            1
+          ],
+          [
+            5,
+            1
+          ],
+          [
+            5,
+            2
+          ],
+          [
+            6,
+            2
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            6,
+            4
+          ],
+          [
+            6,
+            5
+          ],
+          [
+            6,
+            6
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a26",
+        "path": [
+          [
+            2,
+            1
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            3,
+            3
+          ],
+          [
+            4,
+            3
+          ],
+          [
+            5,
+            3
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a27",
+        "path": [
+          [
+            1,
+            2
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            3
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a28",
+        "path": [
+          [
+            3,
+            1
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            4,
+            2
+          ],
+          [
+            3,
+            2
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a29",
+        "path": [
+          [
+            13,
+            9
+          ],
+          [
+            13,
+            10
+          ],
+          [
+            13,
+            11
+          ],
+          [
+            13,
+            12
+          ],
+          [
+            13,
+            13
+          ],
+          [
+            13,
+            14
+          ],
+          [
+            14,
+            14
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a30",
+        "path": [
+          [
+            13,
+            7
+          ],
+          [
+            13,
+            8
+          ],
+          [
+            14,
+            8
+          ],
+          [
+            14,
+            9
+          ],
+          [
+            14,
+            10
+          ],
+          [
+            14,
+            11
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a31",
+        "path": [
+          [
+            15,
+            8
+          ],
+          [
+            15,
+            9
+          ],
+          [
+            15,
+            10
+          ],
+          [
+            15,
+            11
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a32",
+        "path": [
+          [
+            1,
+            13
+          ],
+          [
+            0,
+            13
+          ],
+          [
+            0,
+            12
+          ],
+          [
+            1,
+            12
+          ],
+          [
+            1,
+            11
+          ],
+          [
+            2,
+            11
+          ],
+          [
+            3,
+            11
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a33",
+        "path": [
+          [
+            1,
+            15
+          ],
+          [
+            2,
+            15
+          ],
+          [
+            3,
+            15
+          ],
+          [
+            3,
+            14
+          ],
+          [
+            3,
+            13
+          ],
+          [
+            3,
+            12
+          ],
+          [
+            2,
+            12
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a34",
+        "path": [
+          [
+            2,
+            13
+          ],
+          [
+            2,
+            14
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a35",
+        "path": [
+          [
+            2,
+            4
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            3,
+            7
+          ],
+          [
+            3,
+            8
+          ],
+          [
+            3,
+            9
+          ],
+          [
+            2,
+            9
+          ],
+          [
+            2,
+            10
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a36",
+        "path": [
+          [
+            0,
+            8
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            1,
+            7
+          ],
+          [
+            2,
+            7
+          ],
+          [
+            2,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a37",
+        "path": [
+          [
+            5,
+            8
+          ],
+          [
+            4,
+            8
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a38",
+        "path": [
+          [
+            11,
+            2
+          ],
+          [
+            12,
+            2
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a39",
+        "path": [
+          [
+            11,
+            6
+          ],
+          [
+            11,
+            5
+          ],
+          [
+            11,
+            4
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a40",
+        "path": [
+          [
+            11,
+            8
+          ],
+          [
+            11,
+            7
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a41",
+        "path": [
+          [
+            11,
+            13
+          ],
+          [
+            11,
+            12
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a42",
+        "path": [
+          [
+            8,
+            13
+          ],
+          [
+            9,
+            13
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a43",
+        "path": [
+          [
+            9,
+            9
+          ],
+          [
+            8,
+            9
+          ],
+          [
+            8,
+            10
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a44",
+        "path": [
+          [
+            0,
+            9
+          ],
+          [
+            1,
+            9
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a45",
+        "path": [
+          [
+            1,
+            5
+          ],
+          [
+            2,
+            5
+          ],
+          [
+            2,
+            6
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a46",
+        "path": [
+          [
+            8,
+            0
+          ],
+          [
+            8,
+            1
+          ],
+          [
+            8,
+            2
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a47",
+        "path": [
+          [
+            2,
+            0
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            1
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a48",
+        "path": [
+          [
+            5,
+            0
+          ],
+          [
+            4,
+            0
+          ],
+          [
+            3,
+            0
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a49",
+        "path": [
+          [
+            4,
+            4
+          ],
+          [
+            4,
+            5
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            4
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a50",
+        "path": [
+          [
+            0,
+            5
+          ],
+          [
+            0,
+            4
+          ],
+          [
+            1,
+            4
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a51",
+        "path": [
+          [
+            14,
+            7
+          ],
+          [
+            15,
+            7
+          ],
+          [
+            15,
+            6
+          ],
+          [
+            15,
+            5
+          ],
+          [
+            14,
+            5
+          ],
+          [
+            13,
+            5
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a52",
+        "path": [
+          [
+            4,
+            7
+          ],
+          [
+            4,
+            6
+          ],
+          [
+            5,
+            6
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a53",
+        "path": [
+          [
+            0,
+            7
+          ],
+          [
+            0,
+            6
+          ],
+          [
+            1,
+            6
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a54",
+        "path": [
+          [
+            5,
+            14
+          ],
+          [
+            5,
+            13
+          ],
+          [
+            5,
+            12
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a55",
+        "path": [
+          [
+            0,
+            15
+          ],
+          [
+            0,
+            14
+          ],
+          [
+            1,
+            14
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a56",
+        "path": [
+          [
+            1,
+            10
+          ],
+          [
+            0,
+            10
+          ],
+          [
+            0,
+            11
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a57",
+        "path": [
+          [
+            4,
+            10
+          ],
+          [
+            3,
+            10
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a58",
+        "path": [
+          [
+            10,
+            12
+          ],
+          [
+            9,
+            12
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a59",
+        "path": [
+          [
+            15,
+            0
+          ],
+          [
+            14,
+            0
+          ],
+          [
+            13,
+            0
+          ]
+        ],
+        "direction": "left"
+      }
+    ],
+    "timeLimitMs": null,
+    "obstacles": []
+  },
+  {
+    "number": 13,
+    "width": 18,
+    "height": 18,
+    "seed": 92013,
+    "generatorVersion": 4,
+    "profileVersion": 8,
+    "lifeLimit": 3,
+    "arrows": [
+      {
+        "id": "a0",
+        "path": [
+          [
+            15,
+            2
+          ],
+          [
+            16,
+            2
+          ],
+          [
+            17,
+            2
+          ],
+          [
+            17,
+            1
+          ],
+          [
+            16,
+            1
+          ],
+          [
+            16,
+            0
+          ],
+          [
+            17,
+            0
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a1",
+        "path": [
+          [
+            16,
+            5
+          ],
+          [
+            16,
+            4
+          ],
+          [
+            16,
+            3
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a2",
+        "path": [
+          [
+            15,
+            9
+          ],
+          [
+            15,
+            8
+          ],
+          [
+            14,
+            8
+          ],
+          [
+            14,
+            7
+          ],
+          [
+            14,
+            6
+          ],
+          [
+            15,
+            6
+          ],
+          [
+            15,
+            7
+          ],
+          [
+            16,
+            7
+          ],
+          [
+            16,
+            6
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a3",
+        "path": [
+          [
+            16,
+            10
+          ],
+          [
+            16,
+            9
+          ],
+          [
+            16,
+            8
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a4",
+        "path": [
+          [
+            15,
+            14
+          ],
+          [
+            16,
+            14
+          ],
+          [
+            16,
+            13
+          ],
+          [
+            16,
+            12
+          ],
+          [
+            16,
+            11
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a5",
+        "path": [
+          [
+            16,
+            17
+          ],
+          [
+            17,
+            17
+          ],
+          [
+            17,
+            16
+          ],
+          [
+            16,
+            16
+          ],
+          [
+            16,
+            15
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a6",
+        "path": [
+          [
+            13,
+            15
+          ],
+          [
+            13,
+            16
+          ],
+          [
+            14,
+            16
+          ],
+          [
+            15,
+            16
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a7",
+        "path": [
+          [
+            15,
+            17
+          ],
+          [
+            14,
+            17
+          ],
+          [
+            13,
+            17
+          ],
+          [
+            12,
+            17
+          ],
+          [
+            11,
+            17
+          ],
+          [
+            11,
+            16
+          ],
+          [
+            12,
+            16
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a8",
+        "path": [
+          [
+            8,
+            17
+          ],
+          [
+            7,
+            17
+          ],
+          [
+            7,
+            16
+          ],
+          [
+            8,
+            16
+          ],
+          [
+            9,
+            16
+          ],
+          [
+            9,
+            17
+          ],
+          [
+            10,
+            17
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a9",
+        "path": [
+          [
+            9,
+            13
+          ],
+          [
+            9,
+            14
+          ],
+          [
+            9,
+            15
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a10",
+        "path": [
+          [
+            12,
+            10
+          ],
+          [
+            12,
+            11
+          ],
+          [
+            12,
+            12
+          ],
+          [
+            11,
+            12
+          ],
+          [
+            11,
+            11
+          ],
+          [
+            10,
+            11
+          ],
+          [
+            9,
+            11
+          ],
+          [
+            9,
+            12
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a11",
+        "path": [
+          [
+            11,
+            9
+          ],
+          [
+            10,
+            9
+          ],
+          [
+            9,
+            9
+          ],
+          [
+            9,
+            10
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a12",
+        "path": [
+          [
+            10,
+            7
+          ],
+          [
+            9,
+            7
+          ],
+          [
+            9,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a13",
+        "path": [
+          [
+            8,
+            6
+          ],
+          [
+            8,
+            5
+          ],
+          [
+            9,
+            5
+          ],
+          [
+            9,
+            6
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a14",
+        "path": [
+          [
+            8,
+            0
+          ],
+          [
+            9,
+            0
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            10,
+            1
+          ],
+          [
+            9,
+            1
+          ],
+          [
+            9,
+            2
+          ],
+          [
+            9,
+            3
+          ],
+          [
+            9,
+            4
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a15",
+        "path": [
+          [
+            8,
+            4
+          ],
+          [
+            8,
+            3
+          ],
+          [
+            8,
+            2
+          ],
+          [
+            8,
+            1
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a16",
+        "path": [
+          [
+            7,
+            11
+          ],
+          [
+            7,
+            10
+          ],
+          [
+            8,
+            10
+          ],
+          [
+            8,
+            9
+          ],
+          [
+            8,
+            8
+          ],
+          [
+            8,
+            7
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a17",
+        "path": [
+          [
+            8,
+            15
+          ],
+          [
+            8,
+            14
+          ],
+          [
+            8,
+            13
+          ],
+          [
+            7,
+            13
+          ],
+          [
+            7,
+            12
+          ],
+          [
+            8,
+            12
+          ],
+          [
+            8,
+            11
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a18",
+        "path": [
+          [
+            4,
+            16
+          ],
+          [
+            4,
+            17
+          ],
+          [
+            5,
+            17
+          ],
+          [
+            6,
+            17
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a19",
+        "path": [
+          [
+            2,
+            15
+          ],
+          [
+            2,
+            14
+          ],
+          [
+            3,
+            14
+          ],
+          [
+            4,
+            14
+          ],
+          [
+            4,
+            15
+          ],
+          [
+            5,
+            15
+          ],
+          [
+            5,
+            16
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a20",
+        "path": [
+          [
+            4,
+            11
+          ],
+          [
+            4,
+            10
+          ],
+          [
+            5,
+            10
+          ],
+          [
+            6,
+            10
+          ],
+          [
+            6,
+            11
+          ],
+          [
+            5,
+            11
+          ],
+          [
+            5,
+            12
+          ],
+          [
+            5,
+            13
+          ],
+          [
+            5,
+            14
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a21",
+        "path": [
+          [
+            7,
+            7
+          ],
+          [
+            7,
+            8
+          ],
+          [
+            7,
+            9
+          ],
+          [
+            6,
+            9
+          ],
+          [
+            6,
+            8
+          ],
+          [
+            5,
+            8
+          ],
+          [
+            5,
+            9
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a22",
+        "path": [
+          [
+            6,
+            7
+          ],
+          [
+            6,
+            6
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            5,
+            7
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a23",
+        "path": [
+          [
+            6,
+            3
+          ],
+          [
+            7,
+            3
+          ],
+          [
+            7,
+            4
+          ],
+          [
+            6,
+            4
+          ],
+          [
+            5,
+            4
+          ],
+          [
+            5,
+            5
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a24",
+        "path": [
+          [
+            6,
+            1
+          ],
+          [
+            5,
+            1
+          ],
+          [
+            5,
+            2
+          ],
+          [
+            5,
+            3
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a25",
+        "path": [
+          [
+            14,
+            1
+          ],
+          [
+            15,
+            1
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a26",
+        "path": [
+          [
+            13,
+            4
+          ],
+          [
+            13,
+            3
+          ],
+          [
+            14,
+            3
+          ],
+          [
+            14,
+            2
+          ],
+          [
+            13,
+            2
+          ],
+          [
+            12,
+            2
+          ],
+          [
+            12,
+            1
+          ],
+          [
+            13,
+            1
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a27",
+        "path": [
+          [
+            11,
+            3
+          ],
+          [
+            10,
+            3
+          ],
+          [
+            10,
+            2
+          ],
+          [
+            11,
+            2
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a28",
+        "path": [
+          [
+            6,
+            2
+          ],
+          [
+            7,
+            2
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a29",
+        "path": [
+          [
+            3,
+            1
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            4,
+            2
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a30",
+        "path": [
+          [
+            1,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            2,
+            2
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a31",
+        "path": [
+          [
+            2,
+            5
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            2,
+            4
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            1,
+            5
+          ],
+          [
+            0,
+            5
+          ],
+          [
+            0,
+            4
+          ],
+          [
+            0,
+            3
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a32",
+        "path": [
+          [
+            4,
+            6
+          ],
+          [
+            4,
+            5
+          ],
+          [
+            4,
+            4
+          ],
+          [
+            4,
+            3
+          ],
+          [
+            3,
+            3
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            1,
+            3
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a33",
+        "path": [
+          [
+            7,
+            6
+          ],
+          [
+            7,
+            5
+          ],
+          [
+            6,
+            5
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a34",
+        "path": [
+          [
+            10,
+            4
+          ],
+          [
+            11,
+            4
+          ],
+          [
+            11,
+            5
+          ],
+          [
+            10,
+            5
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a35",
+        "path": [
+          [
+            11,
+            7
+          ],
+          [
+            12,
+            7
+          ],
+          [
+            13,
+            7
+          ],
+          [
+            13,
+            6
+          ],
+          [
+            13,
+            5
+          ],
+          [
+            12,
+            5
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a36",
+        "path": [
+          [
+            15,
+            5
+          ],
+          [
+            14,
+            5
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a37",
+        "path": [
+          [
+            17,
+            8
+          ],
+          [
+            17,
+            9
+          ],
+          [
+            17,
+            10
+          ],
+          [
+            17,
+            11
+          ],
+          [
+            17,
+            12
+          ],
+          [
+            17,
+            13
+          ],
+          [
+            17,
+            14
+          ],
+          [
+            17,
+            15
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a38",
+        "path": [
+          [
+            15,
+            12
+          ],
+          [
+            14,
+            12
+          ],
+          [
+            13,
+            12
+          ],
+          [
+            13,
+            11
+          ],
+          [
+            14,
+            11
+          ],
+          [
+            15,
+            11
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a39",
+        "path": [
+          [
+            1,
+            13
+          ],
+          [
+            2,
+            13
+          ],
+          [
+            3,
+            13
+          ],
+          [
+            3,
+            12
+          ],
+          [
+            2,
+            12
+          ],
+          [
+            2,
+            11
+          ],
+          [
+            3,
+            11
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a40",
+        "path": [
+          [
+            0,
+            11
+          ],
+          [
+            1,
+            11
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a41",
+        "path": [
+          [
+            14,
+            14
+          ],
+          [
+            14,
+            15
+          ],
+          [
+            15,
+            15
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a42",
+        "path": [
+          [
+            10,
+            12
+          ],
+          [
+            10,
+            13
+          ],
+          [
+            11,
+            13
+          ],
+          [
+            11,
+            14
+          ],
+          [
+            11,
+            15
+          ],
+          [
+            12,
+            15
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a43",
+        "path": [
+          [
+            12,
+            13
+          ],
+          [
+            12,
+            14
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a44",
+        "path": [
+          [
+            10,
+            8
+          ],
+          [
+            11,
+            8
+          ],
+          [
+            12,
+            8
+          ],
+          [
+            12,
+            9
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a45",
+        "path": [
+          [
+            4,
+            12
+          ],
+          [
+            4,
+            13
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a46",
+        "path": [
+          [
+            3,
+            8
+          ],
+          [
+            4,
+            8
+          ],
+          [
+            4,
+            9
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a47",
+        "path": [
+          [
+            13,
+            10
+          ],
+          [
+            14,
+            10
+          ],
+          [
+            15,
+            10
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a48",
+        "path": [
+          [
+            10,
+            10
+          ],
+          [
+            11,
+            10
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a49",
+        "path": [
+          [
+            1,
+            9
+          ],
+          [
+            0,
+            9
+          ],
+          [
+            0,
+            10
+          ],
+          [
+            1,
+            10
+          ],
+          [
+            2,
+            10
+          ],
+          [
+            3,
+            10
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a50",
+        "path": [
+          [
+            3,
+            9
+          ],
+          [
+            2,
+            9
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a51",
+        "path": [
+          [
+            6,
+            14
+          ],
+          [
+            6,
+            15
+          ],
+          [
+            6,
+            16
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a52",
+        "path": [
+          [
+            6,
+            12
+          ],
+          [
+            6,
+            13
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a53",
+        "path": [
+          [
+            1,
+            16
+          ],
+          [
+            0,
+            16
+          ],
+          [
+            0,
+            15
+          ],
+          [
+            0,
+            14
+          ],
+          [
+            0,
+            13
+          ],
+          [
+            0,
+            12
+          ],
+          [
+            1,
+            12
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a54",
+        "path": [
+          [
+            3,
+            15
+          ],
+          [
+            3,
+            16
+          ],
+          [
+            2,
+            16
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a55",
+        "path": [
+          [
+            17,
+            7
+          ],
+          [
+            17,
+            6
+          ],
+          [
+            17,
+            5
+          ],
+          [
+            17,
+            4
+          ],
+          [
+            17,
+            3
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a56",
+        "path": [
+          [
+            10,
+            6
+          ],
+          [
+            11,
+            6
+          ],
+          [
+            12,
+            6
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a57",
+        "path": [
+          [
+            12,
+            3
+          ],
+          [
+            12,
+            4
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a58",
+        "path": [
+          [
+            15,
+            3
+          ],
+          [
+            15,
+            4
+          ],
+          [
+            14,
+            4
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a59",
+        "path": [
+          [
+            1,
+            6
+          ],
+          [
+            2,
+            6
+          ],
+          [
+            3,
+            6
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a60",
+        "path": [
+          [
+            0,
+            6
+          ],
+          [
+            0,
+            7
+          ],
+          [
+            0,
+            8
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            1,
+            7
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a61",
+        "path": [
+          [
+            1,
+            15
+          ],
+          [
+            1,
+            14
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a62",
+        "path": [
+          [
+            15,
+            0
+          ],
+          [
+            14,
+            0
+          ],
+          [
+            13,
+            0
+          ],
+          [
+            12,
+            0
+          ],
+          [
+            11,
+            0
+          ],
+          [
+            11,
+            1
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a63",
+        "path": [
+          [
+            14,
+            9
+          ],
+          [
+            13,
+            9
+          ],
+          [
+            13,
+            8
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a64",
+        "path": [
+          [
+            13,
+            14
+          ],
+          [
+            13,
+            13
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a65",
+        "path": [
+          [
+            15,
+            13
+          ],
+          [
+            14,
+            13
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a66",
+        "path": [
+          [
+            7,
+            14
+          ],
+          [
+            7,
+            15
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a67",
+        "path": [
+          [
+            4,
+            1
+          ],
+          [
+            4,
+            0
+          ],
+          [
+            5,
+            0
+          ],
+          [
+            6,
+            0
+          ],
+          [
+            7,
+            0
+          ],
+          [
+            7,
+            1
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a68",
+        "path": [
+          [
+            2,
+            1
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            3,
+            0
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a69",
+        "path": [
+          [
+            2,
+            8
+          ],
+          [
+            2,
+            7
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a70",
+        "path": [
+          [
+            4,
+            7
+          ],
+          [
+            3,
+            7
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a71",
+        "path": [
+          [
+            10,
+            14
+          ],
+          [
+            10,
+            15
+          ],
+          [
+            10,
+            16
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a72",
+        "path": [
+          [
+            0,
+            17
+          ],
+          [
+            1,
+            17
+          ],
+          [
+            2,
+            17
+          ],
+          [
+            3,
+            17
+          ]
+        ],
+        "direction": "right"
+      }
+    ],
+    "timeLimitMs": null,
+    "obstacles": []
+  },
+  {
+    "number": 18,
+    "width": 20,
+    "height": 20,
+    "seed": 92018,
+    "generatorVersion": 4,
+    "profileVersion": 8,
+    "lifeLimit": 3,
+    "arrows": [
+      {
+        "id": "a0",
+        "path": [
+          [
+            3,
+            17
+          ],
+          [
+            2,
+            17
+          ],
+          [
+            1,
+            17
+          ],
+          [
+            0,
+            17
+          ],
+          [
+            0,
+            18
+          ],
+          [
+            0,
+            19
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a1",
+        "path": [
+          [
+            1,
+            18
+          ],
+          [
+            2,
+            18
+          ],
+          [
+            2,
+            19
+          ],
+          [
+            1,
+            19
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a2",
+        "path": [
+          [
+            2,
+            16
+          ],
+          [
+            3,
+            16
+          ],
+          [
+            4,
+            16
+          ],
+          [
+            4,
+            17
+          ],
+          [
+            4,
+            18
+          ],
+          [
+            3,
+            18
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a3",
+        "path": [
+          [
+            7,
+            15
+          ],
+          [
+            7,
+            16
+          ],
+          [
+            6,
+            16
+          ],
+          [
+            6,
+            17
+          ],
+          [
+            5,
+            17
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a4",
+        "path": [
+          [
+            13,
+            15
+          ],
+          [
+            12,
+            15
+          ],
+          [
+            12,
+            16
+          ],
+          [
+            11,
+            16
+          ],
+          [
+            10,
+            16
+          ],
+          [
+            10,
+            17
+          ],
+          [
+            9,
+            17
+          ],
+          [
+            8,
+            17
+          ],
+          [
+            7,
+            17
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a5",
+        "path": [
+          [
+            15,
+            17
+          ],
+          [
+            14,
+            17
+          ],
+          [
+            13,
+            17
+          ],
+          [
+            12,
+            17
+          ],
+          [
+            11,
+            17
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a6",
+        "path": [
+          [
+            17,
+            19
+          ],
+          [
+            16,
+            19
+          ],
+          [
+            16,
+            18
+          ],
+          [
+            17,
+            18
+          ],
+          [
+            17,
+            17
+          ],
+          [
+            16,
+            17
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a7",
+        "path": [
+          [
+            16,
+            16
+          ],
+          [
+            17,
+            16
+          ],
+          [
+            17,
+            15
+          ],
+          [
+            18,
+            15
+          ],
+          [
+            18,
+            16
+          ],
+          [
+            19,
+            16
+          ],
+          [
+            19,
+            17
+          ],
+          [
+            18,
+            17
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a8",
+        "path": [
+          [
+            14,
+            15
+          ],
+          [
+            15,
+            15
+          ],
+          [
+            15,
+            14
+          ],
+          [
+            16,
+            14
+          ],
+          [
+            16,
+            15
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a9",
+        "path": [
+          [
+            18,
+            11
+          ],
+          [
+            17,
+            11
+          ],
+          [
+            17,
+            10
+          ],
+          [
+            16,
+            10
+          ],
+          [
+            16,
+            11
+          ],
+          [
+            16,
+            12
+          ],
+          [
+            16,
+            13
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a10",
+        "path": [
+          [
+            13,
+            9
+          ],
+          [
+            14,
+            9
+          ],
+          [
+            15,
+            9
+          ],
+          [
+            15,
+            8
+          ],
+          [
+            16,
+            8
+          ],
+          [
+            16,
+            9
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a11",
+        "path": [
+          [
+            18,
+            6
+          ],
+          [
+            17,
+            6
+          ],
+          [
+            16,
+            6
+          ],
+          [
+            16,
+            7
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a12",
+        "path": [
+          [
+            16,
+            3
+          ],
+          [
+            16,
+            4
+          ],
+          [
+            16,
+            5
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a13",
+        "path": [
+          [
+            16,
+            0
+          ],
+          [
+            16,
+            1
+          ],
+          [
+            16,
+            2
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a14",
+        "path": [
+          [
+            13,
+            16
+          ],
+          [
+            14,
+            16
+          ],
+          [
+            15,
+            16
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a15",
+        "path": [
+          [
+            9,
+            14
+          ],
+          [
+            8,
+            14
+          ],
+          [
+            8,
+            15
+          ],
+          [
+            8,
+            16
+          ],
+          [
+            9,
+            16
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a16",
+        "path": [
+          [
+            5,
+            19
+          ],
+          [
+            4,
+            19
+          ],
+          [
+            3,
+            19
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a17",
+        "path": [
+          [
+            11,
+            18
+          ],
+          [
+            10,
+            18
+          ],
+          [
+            9,
+            18
+          ],
+          [
+            8,
+            18
+          ],
+          [
+            7,
+            18
+          ],
+          [
+            7,
+            19
+          ],
+          [
+            6,
+            19
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a18",
+        "path": [
+          [
+            6,
+            13
+          ],
+          [
+            7,
+            13
+          ],
+          [
+            7,
+            14
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a19",
+        "path": [
+          [
+            10,
+            12
+          ],
+          [
+            9,
+            12
+          ],
+          [
+            8,
+            12
+          ],
+          [
+            8,
+            11
+          ],
+          [
+            7,
+            11
+          ],
+          [
+            7,
+            12
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a20",
+        "path": [
+          [
+            7,
+            4
+          ],
+          [
+            6,
+            4
+          ],
+          [
+            6,
+            5
+          ],
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            7
+          ],
+          [
+            6,
+            8
+          ],
+          [
+            6,
+            9
+          ],
+          [
+            7,
+            9
+          ],
+          [
+            7,
+            10
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a21",
+        "path": [
+          [
+            9,
+            8
+          ],
+          [
+            9,
+            7
+          ],
+          [
+            9,
+            6
+          ],
+          [
+            8,
+            6
+          ],
+          [
+            7,
+            6
+          ],
+          [
+            7,
+            7
+          ],
+          [
+            7,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a22",
+        "path": [
+          [
+            1,
+            16
+          ],
+          [
+            1,
+            15
+          ],
+          [
+            2,
+            15
+          ],
+          [
+            3,
+            15
+          ],
+          [
+            3,
+            14
+          ],
+          [
+            4,
+            14
+          ],
+          [
+            4,
+            15
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a23",
+        "path": [
+          [
+            6,
+            14
+          ],
+          [
+            5,
+            14
+          ],
+          [
+            5,
+            13
+          ],
+          [
+            5,
+            12
+          ],
+          [
+            4,
+            12
+          ],
+          [
+            4,
+            13
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a24",
+        "path": [
+          [
+            3,
+            7
+          ],
+          [
+            3,
+            8
+          ],
+          [
+            4,
+            8
+          ],
+          [
+            4,
+            9
+          ],
+          [
+            4,
+            10
+          ],
+          [
+            4,
+            11
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a25",
+        "path": [
+          [
+            2,
+            6
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            4,
+            6
+          ],
+          [
+            4,
+            7
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a26",
+        "path": [
+          [
+            1,
+            3
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            3,
+            3
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            4,
+            4
+          ],
+          [
+            4,
+            5
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a27",
+        "path": [
+          [
+            4,
+            0
+          ],
+          [
+            5,
+            0
+          ],
+          [
+            6,
+            0
+          ],
+          [
+            6,
+            1
+          ],
+          [
+            5,
+            1
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            4,
+            2
+          ],
+          [
+            4,
+            3
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a28",
+        "path": [
+          [
+            6,
+            2
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            5,
+            3
+          ],
+          [
+            5,
+            2
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a29",
+        "path": [
+          [
+            5,
+            7
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            4
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a30",
+        "path": [
+          [
+            6,
+            10
+          ],
+          [
+            5,
+            10
+          ],
+          [
+            5,
+            9
+          ],
+          [
+            5,
+            8
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a31",
+        "path": [
+          [
+            18,
+            14
+          ],
+          [
+            18,
+            13
+          ],
+          [
+            17,
+            13
+          ],
+          [
+            17,
+            14
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a32",
+        "path": [
+          [
+            14,
+            19
+          ],
+          [
+            13,
+            19
+          ],
+          [
+            12,
+            19
+          ],
+          [
+            11,
+            19
+          ],
+          [
+            10,
+            19
+          ],
+          [
+            9,
+            19
+          ],
+          [
+            8,
+            19
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a33",
+        "path": [
+          [
+            9,
+            15
+          ],
+          [
+            10,
+            15
+          ],
+          [
+            10,
+            14
+          ],
+          [
+            11,
+            14
+          ],
+          [
+            11,
+            15
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a34",
+        "path": [
+          [
+            9,
+            10
+          ],
+          [
+            10,
+            10
+          ],
+          [
+            11,
+            10
+          ],
+          [
+            12,
+            10
+          ],
+          [
+            12,
+            11
+          ],
+          [
+            11,
+            11
+          ],
+          [
+            11,
+            12
+          ],
+          [
+            11,
+            13
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a35",
+        "path": [
+          [
+            9,
+            5
+          ],
+          [
+            10,
+            5
+          ],
+          [
+            10,
+            6
+          ],
+          [
+            11,
+            6
+          ],
+          [
+            11,
+            7
+          ],
+          [
+            11,
+            8
+          ],
+          [
+            11,
+            9
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a36",
+        "path": [
+          [
+            14,
+            3
+          ],
+          [
+            14,
+            4
+          ],
+          [
+            13,
+            4
+          ],
+          [
+            12,
+            4
+          ],
+          [
+            11,
+            4
+          ],
+          [
+            11,
+            5
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a37",
+        "path": [
+          [
+            13,
+            1
+          ],
+          [
+            13,
+            2
+          ],
+          [
+            13,
+            3
+          ],
+          [
+            12,
+            3
+          ],
+          [
+            12,
+            2
+          ],
+          [
+            11,
+            2
+          ],
+          [
+            11,
+            3
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a38",
+        "path": [
+          [
+            11,
+            0
+          ],
+          [
+            11,
+            1
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a39",
+        "path": [
+          [
+            3,
+            12
+          ],
+          [
+            3,
+            13
+          ],
+          [
+            2,
+            13
+          ],
+          [
+            2,
+            14
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a40",
+        "path": [
+          [
+            0,
+            14
+          ],
+          [
+            1,
+            14
+          ],
+          [
+            1,
+            13
+          ],
+          [
+            1,
+            12
+          ],
+          [
+            1,
+            11
+          ],
+          [
+            2,
+            11
+          ],
+          [
+            2,
+            12
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a41",
+        "path": [
+          [
+            1,
+            7
+          ],
+          [
+            2,
+            7
+          ],
+          [
+            2,
+            8
+          ],
+          [
+            2,
+            9
+          ],
+          [
+            2,
+            10
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a42",
+        "path": [
+          [
+            6,
+            18
+          ],
+          [
+            5,
+            18
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a43",
+        "path": [
+          [
+            6,
+            15
+          ],
+          [
+            5,
+            15
+          ],
+          [
+            5,
+            16
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a44",
+        "path": [
+          [
+            5,
+            11
+          ],
+          [
+            6,
+            11
+          ],
+          [
+            6,
+            12
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a45",
+        "path": [
+          [
+            0,
+            15
+          ],
+          [
+            0,
+            16
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a46",
+        "path": [
+          [
+            0,
+            9
+          ],
+          [
+            0,
+            10
+          ],
+          [
+            0,
+            11
+          ],
+          [
+            0,
+            12
+          ],
+          [
+            0,
+            13
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a47",
+        "path": [
+          [
+            0,
+            5
+          ],
+          [
+            0,
+            6
+          ],
+          [
+            0,
+            7
+          ],
+          [
+            0,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a48",
+        "path": [
+          [
+            2,
+            0
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            4
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a49",
+        "path": [
+          [
+            10,
+            0
+          ],
+          [
+            9,
+            0
+          ],
+          [
+            9,
+            1
+          ],
+          [
+            10,
+            1
+          ],
+          [
+            10,
+            2
+          ],
+          [
+            9,
+            2
+          ],
+          [
+            8,
+            2
+          ],
+          [
+            7,
+            2
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a50",
+        "path": [
+          [
+            9,
+            3
+          ],
+          [
+            9,
+            4
+          ],
+          [
+            10,
+            4
+          ],
+          [
+            10,
+            3
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a51",
+        "path": [
+          [
+            8,
+            10
+          ],
+          [
+            8,
+            9
+          ],
+          [
+            9,
+            9
+          ],
+          [
+            10,
+            9
+          ],
+          [
+            10,
+            8
+          ],
+          [
+            10,
+            7
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a52",
+        "path": [
+          [
+            14,
+            18
+          ],
+          [
+            13,
+            18
+          ],
+          [
+            12,
+            18
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a53",
+        "path": [
+          [
+            14,
+            10
+          ],
+          [
+            13,
+            10
+          ],
+          [
+            13,
+            11
+          ],
+          [
+            13,
+            12
+          ],
+          [
+            12,
+            12
+          ],
+          [
+            12,
+            13
+          ],
+          [
+            12,
+            14
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a54",
+        "path": [
+          [
+            13,
+            5
+          ],
+          [
+            12,
+            5
+          ],
+          [
+            12,
+            6
+          ],
+          [
+            12,
+            7
+          ],
+          [
+            12,
+            8
+          ],
+          [
+            12,
+            9
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a55",
+        "path": [
+          [
+            14,
+            2
+          ],
+          [
+            14,
+            1
+          ],
+          [
+            15,
+            1
+          ],
+          [
+            15,
+            0
+          ],
+          [
+            14,
+            0
+          ],
+          [
+            13,
+            0
+          ],
+          [
+            12,
+            0
+          ],
+          [
+            12,
+            1
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a56",
+        "path": [
+          [
+            15,
+            4
+          ],
+          [
+            15,
+            5
+          ],
+          [
+            15,
+            6
+          ],
+          [
+            14,
+            6
+          ],
+          [
+            14,
+            5
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a57",
+        "path": [
+          [
+            3,
+            9
+          ],
+          [
+            3,
+            10
+          ],
+          [
+            3,
+            11
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a58",
+        "path": [
+          [
+            10,
+            11
+          ],
+          [
+            9,
+            11
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a59",
+        "path": [
+          [
+            14,
+            13
+          ],
+          [
+            14,
+            14
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a60",
+        "path": [
+          [
+            15,
+            10
+          ],
+          [
+            15,
+            11
+          ],
+          [
+            14,
+            11
+          ],
+          [
+            14,
+            12
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a61",
+        "path": [
+          [
+            13,
+            13
+          ],
+          [
+            13,
+            14
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a62",
+        "path": [
+          [
+            10,
+            13
+          ],
+          [
+            9,
+            13
+          ],
+          [
+            8,
+            13
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a63",
+        "path": [
+          [
+            8,
+            7
+          ],
+          [
+            8,
+            8
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a64",
+        "path": [
+          [
+            3,
+            0
+          ],
+          [
+            3,
+            1
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            1,
+            1
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a65",
+        "path": [
+          [
+            1,
+            4
+          ],
+          [
+            2,
+            4
+          ],
+          [
+            2,
+            3
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a66",
+        "path": [
+          [
+            7,
+            5
+          ],
+          [
+            8,
+            5
+          ],
+          [
+            8,
+            4
+          ],
+          [
+            8,
+            3
+          ],
+          [
+            7,
+            3
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a67",
+        "path": [
+          [
+            8,
+            1
+          ],
+          [
+            8,
+            0
+          ],
+          [
+            7,
+            0
+          ],
+          [
+            7,
+            1
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a68",
+        "path": [
+          [
+            18,
+            1
+          ],
+          [
+            18,
+            0
+          ],
+          [
+            17,
+            0
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a69",
+        "path": [
+          [
+            19,
+            6
+          ],
+          [
+            19,
+            5
+          ],
+          [
+            19,
+            4
+          ],
+          [
+            18,
+            4
+          ],
+          [
+            17,
+            4
+          ],
+          [
+            17,
+            3
+          ],
+          [
+            18,
+            3
+          ],
+          [
+            18,
+            2
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a70",
+        "path": [
+          [
+            17,
+            5
+          ],
+          [
+            18,
+            5
+          ]
+        ],
+        "direction": "right"
+      },
+      {
+        "id": "a71",
+        "path": [
+          [
+            17,
+            7
+          ],
+          [
+            17,
+            8
+          ],
+          [
+            18,
+            8
+          ],
+          [
+            18,
+            7
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a72",
+        "path": [
+          [
+            17,
+            2
+          ],
+          [
+            17,
+            1
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a73",
+        "path": [
+          [
+            1,
+            6
+          ],
+          [
+            1,
+            5
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a74",
+        "path": [
+          [
+            3,
+            5
+          ],
+          [
+            2,
+            5
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a75",
+        "path": [
+          [
+            1,
+            10
+          ],
+          [
+            1,
+            9
+          ],
+          [
+            1,
+            8
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a76",
+        "path": [
+          [
+            19,
+            11
+          ],
+          [
+            19,
+            10
+          ],
+          [
+            18,
+            10
+          ],
+          [
+            18,
+            9
+          ],
+          [
+            17,
+            9
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a77",
+        "path": [
+          [
+            13,
+            8
+          ],
+          [
+            13,
+            7
+          ],
+          [
+            13,
+            6
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a78",
+        "path": [
+          [
+            15,
+            7
+          ],
+          [
+            14,
+            7
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a79",
+        "path": [
+          [
+            15,
+            3
+          ],
+          [
+            15,
+            2
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a80",
+        "path": [
+          [
+            15,
+            13
+          ],
+          [
+            15,
+            12
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a81",
+        "path": [
+          [
+            19,
+            15
+          ],
+          [
+            19,
+            14
+          ],
+          [
+            19,
+            13
+          ],
+          [
+            19,
+            12
+          ],
+          [
+            18,
+            12
+          ],
+          [
+            17,
+            12
+          ]
+        ],
+        "direction": "left"
+      },
+      {
+        "id": "a82",
+        "path": [
+          [
+            19,
+            18
+          ],
+          [
+            19,
+            19
+          ],
+          [
+            18,
+            19
+          ],
+          [
+            18,
+            18
+          ]
+        ],
+        "direction": "up"
+      },
+      {
+        "id": "a83",
+        "path": [
+          [
+            19,
+            7
+          ],
+          [
+            19,
+            8
+          ],
+          [
+            19,
+            9
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a84",
+        "path": [
+          [
+            19,
+            0
+          ],
+          [
+            19,
+            1
+          ],
+          [
+            19,
+            2
+          ],
+          [
+            19,
+            3
+          ]
+        ],
+        "direction": "down"
+      },
+      {
+        "id": "a85",
+        "path": [
+          [
+            15,
+            19
+          ],
+          [
+            15,
+            18
+          ]
+        ],
+        "direction": "up"
+      }
+    ],
+    "timeLimitMs": null,
+    "obstacles": [
+      [
+        14,
+        8
+      ]
+    ]
+  }
 ];
+
+},
+"src/generation/obstacle-fallbacks.js":function(module,exports,require){
+'use strict';
+module.exports={"18:1":{"number":15,"width":18,"height":18,"seed":92015,"generatorVersion":4,"profileVersion":8,"lifeLimit":3,"arrows":[{"id":"a0","path":[[16,14],[17,14],[17,15],[17,16],[17,17]],"direction":"down"},{"id":"a1","path":[[15,9],[15,8],[16,8],[16,9],[17,9],[17,10],[17,11],[17,12],[17,13]],"direction":"down"},{"id":"a2","path":[[14,15],[14,14],[13,14],[13,13],[14,13],[15,13],[16,13]],"direction":"right"},{"id":"a3","path":[[7,14],[7,15],[8,15],[8,14],[9,14],[9,13],[10,13],[11,13],[12,13]],"direction":"right"},{"id":"a4","path":[[4,16],[5,16],[5,15],[5,14],[6,14],[6,13],[7,13],[8,13]],"direction":"right"},{"id":"a5","path":[[1,15],[1,16],[2,16],[2,15],[2,14],[3,14],[4,14],[4,13],[5,13]],"direction":"right"},{"id":"a6","path":[[0,13],[1,13],[2,13],[3,13]],"direction":"right"},{"id":"a7","path":[[13,11],[14,11],[15,11],[16,11]],"direction":"right"},{"id":"a8","path":[[9,12],[10,12],[10,11],[10,10],[11,10],[11,11],[12,11]],"direction":"right"},{"id":"a9","path":[[3,11],[3,12],[4,12],[5,12],[6,12],[7,12],[8,12],[8,11],[9,11]],"direction":"right"},{"id":"a10","path":[[2,10],[3,10],[4,10],[4,11],[5,11],[6,11],[7,11]],"direction":"right"},{"id":"a11","path":[[1,9],[1,10],[1,11],[2,11]],"direction":"right"},{"id":"a12","path":[[11,8],[11,9],[12,9],[12,10],[13,10],[14,10],[15,10],[16,10]],"direction":"right"},{"id":"a13","path":[[7,10],[8,10],[9,10]],"direction":"right"},{"id":"a14","path":[[6,9],[5,9],[5,10],[6,10]],"direction":"right"},{"id":"a15","path":[[12,17],[13,17],[14,17],[15,17],[16,17]],"direction":"right"},{"id":"a16","path":[[11,14],[12,14],[12,15],[12,16]],"direction":"down"},{"id":"a17","path":[[15,6],[15,7],[16,7],[17,7],[17,8]],"direction":"down"},{"id":"a18","path":[[13,8],[14,8]],"direction":"right"},{"id":"a19","path":[[11,15],[11,16],[10,16],[10,17],[11,17]],"direction":"right"},{"id":"a20","path":[[9,15],[9,16],[8,16],[8,17],[9,17]],"direction":"right"},{"id":"a21","path":[[9,8],[9,9]],"direction":"down"},{"id":"a22","path":[[10,3],[10,4],[10,5],[9,5],[9,6],[9,7]],"direction":"down"},{"id":"a23","path":[[7,1],[8,1],[8,2],[9,2],[9,3],[9,4]],"direction":"down"},{"id":"a24","path":[[6,1],[6,0],[7,0],[8,0],[9,0],[9,1]],"direction":"down"},{"id":"a25","path":[[8,3],[8,4],[7,4],[7,3],[7,2]],"direction":"up"},{"id":"a26","path":[[7,7],[7,6],[8,6],[8,5]],"direction":"up"},{"id":"a27","path":[[8,9],[7,9],[7,8],[8,8],[8,7]],"direction":"up"},{"id":"a28","path":[[15,14],[15,15],[16,15],[16,16]],"direction":"down"},{"id":"a29","path":[[13,15],[13,16],[14,16],[15,16]],"direction":"right"},{"id":"a30","path":[[6,15],[6,16],[7,16]],"direction":"right"},{"id":"a31","path":[[3,16],[3,17],[4,17],[5,17],[6,17],[7,17]],"direction":"right"},{"id":"a32","path":[[5,7],[6,7],[6,8]],"direction":"down"},{"id":"a33","path":[[10,14],[10,15]],"direction":"down"},{"id":"a34","path":[[0,15],[0,14],[1,14]],"direction":"right"},{"id":"a35","path":[[4,15],[3,15]],"direction":"left"},{"id":"a36","path":[[4,7],[4,6],[3,6],[3,7],[3,8],[3,9]],"direction":"down"},{"id":"a37","path":[[1,7],[1,6],[2,6],[2,5],[2,4],[3,4],[3,5]],"direction":"down"},{"id":"a38","path":[[1,1],[2,1],[3,1],[3,2],[3,3]],"direction":"down"},{"id":"a39","path":[[5,8],[4,8],[4,9]],"direction":"down"},{"id":"a40","path":[[4,1],[4,0],[5,0],[5,1],[5,2],[5,3],[5,4],[5,5],[5,6]],"direction":"down"},{"id":"a41","path":[[4,5],[4,4],[4,3],[4,2]],"direction":"up"},{"id":"a42","path":[[11,7],[10,7],[10,8],[10,9]],"direction":"down"},{"id":"a43","path":[[0,16],[0,17],[1,17],[2,17]],"direction":"right"},{"id":"a44","path":[[1,8],[0,8],[0,9],[0,10],[0,11],[0,12]],"direction":"down"},{"id":"a45","path":[[2,12],[1,12]],"direction":"left"},{"id":"a46","path":[[13,12],[12,12],[11,12]],"direction":"left"},{"id":"a47","path":[[16,12],[15,12],[14,12]],"direction":"left"},{"id":"a48","path":[[16,5],[16,6]],"direction":"down"},{"id":"a49","path":[[16,2],[16,1],[16,0],[17,0],[17,1],[17,2],[17,3],[16,3],[16,4]],"direction":"down"},{"id":"a50","path":[[17,6],[17,5],[17,4]],"direction":"up"},{"id":"a51","path":[[13,6],[13,5],[14,5],[15,5]],"direction":"right"},{"id":"a52","path":[[14,0],[14,1],[14,2],[15,2],[15,3],[15,4]],"direction":"down"},{"id":"a53","path":[[12,3],[11,3],[11,2],[12,2],[13,2]],"direction":"right"},{"id":"a54","path":[[15,0],[15,1]],"direction":"down"},{"id":"a55","path":[[13,1],[12,1],[12,0],[13,0]],"direction":"right"},{"id":"a56","path":[[14,3],[14,4],[13,4],[13,3]],"direction":"up"},{"id":"a57","path":[[13,7],[14,7],[14,6]],"direction":"up"},{"id":"a58","path":[[2,7],[2,8],[2,9]],"direction":"down"},{"id":"a59","path":[[0,3],[0,2],[1,2],[2,2],[2,3]],"direction":"down"},{"id":"a60","path":[[10,6],[11,6],[12,6]],"direction":"right"},{"id":"a61","path":[[12,5],[12,4],[11,4],[11,5]],"direction":"down"},{"id":"a62","path":[[12,8],[12,7]],"direction":"up"},{"id":"a63","path":[[1,3],[1,4],[1,5]],"direction":"down"},{"id":"a64","path":[[10,0],[11,0],[11,1],[10,1],[10,2]],"direction":"down"},{"id":"a65","path":[[0,1],[0,0],[1,0],[2,0],[3,0]],"direction":"right"},{"id":"a66","path":[[0,7],[0,6],[0,5],[0,4]],"direction":"up"},{"id":"a67","path":[[7,5],[6,5],[6,6]],"direction":"down"},{"id":"a68","path":[[6,3],[6,4]],"direction":"down"},{"id":"a69","path":[[14,9],[13,9]],"direction":"left"}],"timeLimitMs":null,"obstacles":[[6,2]]},"20:1":{"number":18,"width":20,"height":20,"seed":92018,"generatorVersion":4,"profileVersion":8,"lifeLimit":3,"arrows":[{"id":"a0","path":[[3,17],[2,17],[1,17],[0,17],[0,18],[0,19]],"direction":"down"},{"id":"a1","path":[[1,18],[2,18],[2,19],[1,19]],"direction":"left"},{"id":"a2","path":[[2,16],[3,16],[4,16],[4,17],[4,18],[3,18]],"direction":"left"},{"id":"a3","path":[[7,15],[7,16],[6,16],[6,17],[5,17]],"direction":"left"},{"id":"a4","path":[[13,15],[12,15],[12,16],[11,16],[10,16],[10,17],[9,17],[8,17],[7,17]],"direction":"left"},{"id":"a5","path":[[15,17],[14,17],[13,17],[12,17],[11,17]],"direction":"left"},{"id":"a6","path":[[17,19],[16,19],[16,18],[17,18],[17,17],[16,17]],"direction":"left"},{"id":"a7","path":[[16,16],[17,16],[17,15],[18,15],[18,16],[19,16],[19,17],[18,17]],"direction":"left"},{"id":"a8","path":[[14,15],[15,15],[15,14],[16,14],[16,15]],"direction":"down"},{"id":"a9","path":[[18,11],[17,11],[17,10],[16,10],[16,11],[16,12],[16,13]],"direction":"down"},{"id":"a10","path":[[13,9],[14,9],[15,9],[15,8],[16,8],[16,9]],"direction":"down"},{"id":"a11","path":[[18,6],[17,6],[16,6],[16,7]],"direction":"down"},{"id":"a12","path":[[16,3],[16,4],[16,5]],"direction":"down"},{"id":"a13","path":[[16,0],[16,1],[16,2]],"direction":"down"},{"id":"a14","path":[[13,16],[14,16],[15,16]],"direction":"right"},{"id":"a15","path":[[9,14],[8,14],[8,15],[8,16],[9,16]],"direction":"right"},{"id":"a16","path":[[5,19],[4,19],[3,19]],"direction":"left"},{"id":"a17","path":[[11,18],[10,18],[9,18],[8,18],[7,18],[7,19],[6,19]],"direction":"left"},{"id":"a18","path":[[6,13],[7,13],[7,14]],"direction":"down"},{"id":"a19","path":[[10,12],[9,12],[8,12],[8,11],[7,11],[7,12]],"direction":"down"},{"id":"a20","path":[[7,4],[6,4],[6,5],[6,6],[6,7],[6,8],[6,9],[7,9],[7,10]],"direction":"down"},{"id":"a21","path":[[9,8],[9,7],[9,6],[8,6],[7,6],[7,7],[7,8]],"direction":"down"},{"id":"a22","path":[[1,16],[1,15],[2,15],[3,15],[3,14],[4,14],[4,15]],"direction":"down"},{"id":"a23","path":[[6,14],[5,14],[5,13],[5,12],[4,12],[4,13]],"direction":"down"},{"id":"a24","path":[[3,7],[3,8],[4,8],[4,9],[4,10],[4,11]],"direction":"down"},{"id":"a25","path":[[2,6],[3,6],[4,6],[4,7]],"direction":"down"},{"id":"a26","path":[[1,3],[1,2],[2,2],[3,2],[3,3],[3,4],[4,4],[4,5]],"direction":"down"},{"id":"a27","path":[[4,0],[5,0],[6,0],[6,1],[5,1],[4,1],[4,2],[4,3]],"direction":"down"},{"id":"a28","path":[[6,2],[6,3],[5,3],[5,2]],"direction":"up"},{"id":"a29","path":[[5,7],[5,6],[5,5],[5,4]],"direction":"up"},{"id":"a30","path":[[6,10],[5,10],[5,9],[5,8]],"direction":"up"},{"id":"a31","path":[[18,14],[18,13],[17,13],[17,14]],"direction":"down"},{"id":"a32","path":[[14,19],[13,19],[12,19],[11,19],[10,19],[9,19],[8,19]],"direction":"left"},{"id":"a33","path":[[9,15],[10,15],[10,14],[11,14],[11,15]],"direction":"down"},{"id":"a34","path":[[9,10],[10,10],[11,10],[12,10],[12,11],[11,11],[11,12],[11,13]],"direction":"down"},{"id":"a35","path":[[9,5],[10,5],[10,6],[11,6],[11,7],[11,8],[11,9]],"direction":"down"},{"id":"a36","path":[[14,3],[14,4],[13,4],[12,4],[11,4],[11,5]],"direction":"down"},{"id":"a37","path":[[13,1],[13,2],[13,3],[12,3],[12,2],[11,2],[11,3]],"direction":"down"},{"id":"a38","path":[[11,0],[11,1]],"direction":"down"},{"id":"a39","path":[[3,12],[3,13],[2,13],[2,14]],"direction":"down"},{"id":"a40","path":[[0,14],[1,14],[1,13],[1,12],[1,11],[2,11],[2,12]],"direction":"down"},{"id":"a41","path":[[1,7],[2,7],[2,8],[2,9],[2,10]],"direction":"down"},{"id":"a42","path":[[6,18],[5,18]],"direction":"left"},{"id":"a43","path":[[6,15],[5,15],[5,16]],"direction":"down"},{"id":"a44","path":[[5,11],[6,11],[6,12]],"direction":"down"},{"id":"a45","path":[[0,15],[0,16]],"direction":"down"},{"id":"a46","path":[[0,9],[0,10],[0,11],[0,12],[0,13]],"direction":"down"},{"id":"a47","path":[[0,5],[0,6],[0,7],[0,8]],"direction":"down"},{"id":"a48","path":[[2,0],[1,0],[0,0],[0,1],[0,2],[0,3],[0,4]],"direction":"down"},{"id":"a49","path":[[10,0],[9,0],[9,1],[10,1],[10,2],[9,2],[8,2],[7,2]],"direction":"left"},{"id":"a50","path":[[9,3],[9,4],[10,4],[10,3]],"direction":"up"},{"id":"a51","path":[[8,10],[8,9],[9,9],[10,9],[10,8],[10,7]],"direction":"up"},{"id":"a52","path":[[14,18],[13,18],[12,18]],"direction":"left"},{"id":"a53","path":[[14,10],[13,10],[13,11],[13,12],[12,12],[12,13],[12,14]],"direction":"down"},{"id":"a54","path":[[13,5],[12,5],[12,6],[12,7],[12,8],[12,9]],"direction":"down"},{"id":"a55","path":[[14,2],[14,1],[15,1],[15,0],[14,0],[13,0],[12,0],[12,1]],"direction":"down"},{"id":"a56","path":[[15,4],[15,5],[15,6],[14,6],[14,5]],"direction":"up"},{"id":"a57","path":[[3,9],[3,10],[3,11]],"direction":"down"},{"id":"a58","path":[[10,11],[9,11]],"direction":"left"},{"id":"a59","path":[[14,13],[14,14]],"direction":"down"},{"id":"a60","path":[[15,10],[15,11],[14,11],[14,12]],"direction":"down"},{"id":"a61","path":[[13,13],[13,14]],"direction":"down"},{"id":"a62","path":[[10,13],[9,13],[8,13]],"direction":"left"},{"id":"a63","path":[[8,7],[8,8]],"direction":"down"},{"id":"a64","path":[[3,0],[3,1],[2,1],[1,1]],"direction":"left"},{"id":"a65","path":[[1,4],[2,4],[2,3]],"direction":"up"},{"id":"a66","path":[[7,5],[8,5],[8,4],[8,3],[7,3]],"direction":"left"},{"id":"a67","path":[[8,1],[8,0],[7,0],[7,1]],"direction":"down"},{"id":"a68","path":[[18,1],[18,0],[17,0]],"direction":"left"},{"id":"a69","path":[[19,6],[19,5],[19,4],[18,4],[17,4],[17,3],[18,3],[18,2]],"direction":"up"},{"id":"a70","path":[[17,5],[18,5]],"direction":"right"},{"id":"a71","path":[[17,7],[17,8],[18,8],[18,7]],"direction":"up"},{"id":"a72","path":[[17,2],[17,1]],"direction":"up"},{"id":"a73","path":[[1,6],[1,5]],"direction":"up"},{"id":"a74","path":[[3,5],[2,5]],"direction":"left"},{"id":"a75","path":[[1,10],[1,9],[1,8]],"direction":"up"},{"id":"a76","path":[[19,11],[19,10],[18,10],[18,9],[17,9]],"direction":"left"},{"id":"a77","path":[[13,8],[13,7],[13,6]],"direction":"up"},{"id":"a78","path":[[15,7],[14,7]],"direction":"left"},{"id":"a79","path":[[15,3],[15,2]],"direction":"up"},{"id":"a80","path":[[15,13],[15,12]],"direction":"up"},{"id":"a81","path":[[19,15],[19,14],[19,13],[19,12],[18,12],[17,12]],"direction":"left"},{"id":"a82","path":[[19,18],[19,19],[18,19],[18,18]],"direction":"up"},{"id":"a83","path":[[19,7],[19,8],[19,9]],"direction":"down"},{"id":"a84","path":[[19,0],[19,1],[19,2],[19,3]],"direction":"down"},{"id":"a85","path":[[15,19],[15,18]],"direction":"up"}],"timeLimitMs":null,"obstacles":[[14,8]]},"20:2":{"number":20,"width":20,"height":20,"seed":92020,"generatorVersion":4,"profileVersion":8,"lifeLimit":3,"arrows":[{"id":"a0","path":[[2,17],[2,18],[2,19]],"direction":"down"},{"id":"a1","path":[[1,14],[2,14],[2,15],[2,16]],"direction":"down"},{"id":"a2","path":[[1,8],[1,9],[2,9],[2,10],[2,11],[1,11],[1,12],[2,12],[2,13]],"direction":"down"},{"id":"a3","path":[[3,7],[2,7],[2,8]],"direction":"down"},{"id":"a4","path":[[5,5],[4,5],[3,5],[2,5],[2,6]],"direction":"down"},{"id":"a5","path":[[2,2],[2,3],[2,4]],"direction":"down"},{"id":"a6","path":[[0,0],[1,0],[2,0],[2,1]],"direction":"down"},{"id":"a7","path":[[1,5],[1,4],[1,3],[1,2],[0,2],[0,1]],"direction":"up"},{"id":"a8","path":[[3,3],[3,4],[4,4],[4,3],[4,2],[3,2]],"direction":"left"},{"id":"a9","path":[[7,2],[6,2],[5,2]],"direction":"left"},{"id":"a10","path":[[12,2],[12,3],[11,3],[11,2],[10,2],[9,2],[8,2]],"direction":"left"},{"id":"a11","path":[[14,5],[14,4],[13,4],[13,3],[14,3],[14,2],[13,2]],"direction":"left"},{"id":"a12","path":[[18,1],[18,2],[17,2],[16,2],[15,2]],"direction":"left"},{"id":"a13","path":[[0,5],[0,4],[0,3]],"direction":"up"},{"id":"a14","path":[[6,6],[6,5],[6,4],[5,4]],"direction":"left"},{"id":"a15","path":[[8,3],[8,4],[8,5],[7,5]],"direction":"left"},{"id":"a16","path":[[12,4],[12,5],[11,5],[10,5],[9,5]],"direction":"left"},{"id":"a17","path":[[7,4],[7,3],[6,3],[5,3]],"direction":"left"},{"id":"a18","path":[[11,4],[10,4],[9,4]],"direction":"left"},{"id":"a19","path":[[15,5],[16,5],[16,4],[15,4]],"direction":"left"},{"id":"a20","path":[[18,6],[18,5],[18,4],[17,4]],"direction":"left"},{"id":"a21","path":[[10,3],[9,3]],"direction":"left"},{"id":"a22","path":[[19,0],[19,1],[19,2],[19,3],[18,3],[17,3],[16,3],[15,3]],"direction":"left"},{"id":"a23","path":[[14,0],[15,0],[16,0],[16,1],[17,1]],"direction":"right"},{"id":"a24","path":[[16,12],[16,11],[16,10],[16,9],[16,8],[16,7],[16,6]],"direction":"up"},{"id":"a25","path":[[14,13],[14,14],[14,15],[15,15],[16,15],[16,14],[16,13]],"direction":"up"},{"id":"a26","path":[[17,19],[16,19],[15,19],[15,18],[16,18],[16,17],[16,16]],"direction":"up"},{"id":"a27","path":[[13,14],[13,15],[13,16],[14,16],[15,16],[15,17]],"direction":"down"},{"id":"a28","path":[[14,11],[14,12],[15,12],[15,13],[15,14]],"direction":"down"},{"id":"a29","path":[[14,10],[15,10],[15,11]],"direction":"down"},{"id":"a30","path":[[18,11],[18,10],[18,9],[19,9],[19,8],[19,7],[19,6],[19,5],[19,4]],"direction":"up"},{"id":"a31","path":[[18,8],[17,8],[17,7],[18,7]],"direction":"right"},{"id":"a32","path":[[14,7],[15,7]],"direction":"right"},{"id":"a33","path":[[10,8],[11,8],[11,7],[11,6],[12,6],[12,7],[13,7]],"direction":"right"},{"id":"a34","path":[[10,6],[9,6],[9,7],[10,7]],"direction":"right"},{"id":"a35","path":[[5,6],[5,7],[6,7],[7,7],[8,7]],"direction":"right"},{"id":"a36","path":[[17,13],[17,14],[18,14],[19,14],[19,13],[19,12],[19,11],[19,10]],"direction":"up"},{"id":"a37","path":[[11,16],[10,16],[9,16],[9,15],[10,15],[11,15],[11,14],[12,14]],"direction":"right"},{"id":"a38","path":[[9,11],[9,12],[9,13],[9,14],[10,14]],"direction":"right"},{"id":"a39","path":[[6,16],[7,16],[7,15],[7,14],[8,14]],"direction":"right"},{"id":"a40","path":[[3,14],[3,13],[4,13],[5,13],[5,14],[6,14]],"direction":"right"},{"id":"a41","path":[[19,17],[18,17],[18,16],[17,16],[17,17],[17,18]],"direction":"down"},{"id":"a42","path":[[12,15],[12,16],[12,17],[13,17],[14,17]],"direction":"right"},{"id":"a43","path":[[10,19],[11,19],[12,19],[12,18],[11,18],[10,18],[10,17],[11,17]],"direction":"right"},{"id":"a44","path":[[13,10],[13,11],[12,11],[11,11],[11,12],[10,12],[10,13]],"direction":"down"},{"id":"a45","path":[[11,10],[12,10],[12,9],[11,9],[10,9],[10,10],[10,11]],"direction":"down"},{"id":"a46","path":[[13,1],[12,1],[11,1],[11,0],[10,0],[10,1]],"direction":"down"},{"id":"a47","path":[[14,8],[15,8]],"direction":"right"},{"id":"a48","path":[[12,8],[13,8]],"direction":"right"},{"id":"a49","path":[[8,10],[9,10],[9,9],[8,9],[8,8],[9,8]],"direction":"right"},{"id":"a50","path":[[5,10],[6,10],[6,9],[6,8],[7,8]],"direction":"right"},{"id":"a51","path":[[6,11],[5,11],[4,11],[3,11],[3,10],[3,9],[3,8],[4,8],[5,8]],"direction":"right"},{"id":"a52","path":[[17,0],[18,0]],"direction":"right"},{"id":"a53","path":[[12,0],[13,0]],"direction":"right"},{"id":"a54","path":[[15,6],[14,6],[13,6],[13,5]],"direction":"up"},{"id":"a55","path":[[19,16],[19,15]],"direction":"up"},{"id":"a56","path":[[17,15],[18,15]],"direction":"right"},{"id":"a57","path":[[17,9],[17,10],[17,11],[17,12]],"direction":"down"},{"id":"a58","path":[[17,5],[17,6]],"direction":"down"},{"id":"a59","path":[[7,6],[8,6]],"direction":"right"},{"id":"a60","path":[[9,1],[8,1],[8,0],[9,0]],"direction":"right"},{"id":"a61","path":[[7,1],[6,1],[6,0],[7,0]],"direction":"right"},{"id":"a62","path":[[4,0],[5,0]],"direction":"right"},{"id":"a63","path":[[18,13],[18,12]],"direction":"up"},{"id":"a64","path":[[12,12],[13,12]],"direction":"right"},{"id":"a65","path":[[7,12],[8,12]],"direction":"right"},{"id":"a66","path":[[3,12],[4,12],[5,12],[6,12]],"direction":"right"},{"id":"a67","path":[[18,18],[18,19],[19,19],[19,18]],"direction":"up"},{"id":"a68","path":[[14,19],[13,19],[13,18],[14,18]],"direction":"right"},{"id":"a69","path":[[6,18],[7,18],[8,18],[8,19],[9,19]],"direction":"right"},{"id":"a70","path":[[8,15],[8,16],[8,17]],"direction":"down"},{"id":"a71","path":[[5,19],[4,19],[3,19],[3,18],[3,17],[3,16],[4,16],[5,16]],"direction":"right"},{"id":"a72","path":[[5,17],[5,18]],"direction":"down"},{"id":"a73","path":[[6,19],[7,19]],"direction":"right"},{"id":"a74","path":[[1,15],[1,16],[0,16],[0,17],[1,17],[1,18],[0,18],[0,19],[1,19]],"direction":"right"},{"id":"a75","path":[[0,14],[0,15]],"direction":"down"},{"id":"a76","path":[[4,14],[4,15],[3,15]],"direction":"left"},{"id":"a77","path":[[6,15],[5,15]],"direction":"left"},{"id":"a78","path":[[4,17],[4,18]],"direction":"down"},{"id":"a79","path":[[5,9],[4,9],[4,10]],"direction":"down"},{"id":"a80","path":[[3,6],[4,6],[4,7]],"direction":"down"},{"id":"a81","path":[[0,6],[1,6]],"direction":"right"},{"id":"a82","path":[[14,1],[15,1]],"direction":"right"},{"id":"a83","path":[[3,0],[3,1],[4,1],[5,1]],"direction":"right"},{"id":"a84","path":[[0,9],[0,8],[0,7],[1,7]],"direction":"right"},{"id":"a85","path":[[8,11],[7,11],[7,10],[7,9]],"direction":"up"},{"id":"a86","path":[[1,13],[0,13],[0,12],[0,11],[0,10],[1,10]],"direction":"right"},{"id":"a87","path":[[8,13],[7,13],[6,13]],"direction":"left"},{"id":"a88","path":[[13,13],[12,13],[11,13]],"direction":"left"},{"id":"a89","path":[[9,18],[9,17]],"direction":"up"},{"id":"a90","path":[[6,17],[7,17]],"direction":"right"},{"id":"a91","path":[[14,9],[13,9]],"direction":"left"}],"timeLimitMs":180000,"obstacles":[[1,1],[15,9]]},"20:3":{"number":25,"width":20,"height":20,"seed":92025,"generatorVersion":4,"profileVersion":8,"lifeLimit":3,"arrows":[{"id":"a0","path":[[19,5],[19,4],[19,3],[19,2],[19,1],[18,1],[18,0],[19,0]],"direction":"right"},{"id":"a1","path":[[16,1],[16,2],[16,3],[17,3],[18,3]],"direction":"right"},{"id":"a2","path":[[14,7],[14,6],[14,5],[14,4],[14,3],[15,3]],"direction":"right"},{"id":"a3","path":[[10,0],[11,0],[11,1],[11,2],[11,3],[12,3],[13,3]],"direction":"right"},{"id":"a4","path":[[12,5],[11,5],[11,4],[10,4],[10,3],[10,2],[10,1]],"direction":"up"},{"id":"a5","path":[[9,8],[9,7],[10,7],[11,7],[11,6]],"direction":"up"},{"id":"a6","path":[[11,9],[11,8]],"direction":"up"},{"id":"a7","path":[[14,11],[13,11],[13,10],[12,10],[12,11],[11,11],[11,10]],"direction":"up"},{"id":"a8","path":[[9,12],[10,12],[10,13],[11,13],[11,12]],"direction":"up"},{"id":"a9","path":[[8,18],[9,18],[9,17],[10,17],[11,17],[11,16],[11,15],[11,14]],"direction":"up"},{"id":"a10","path":[[14,1],[15,1],[15,0],[16,0],[17,0],[17,1],[17,2],[18,2]],"direction":"right"},{"id":"a11","path":[[17,4],[17,5],[17,6],[16,6],[16,5],[16,4]],"direction":"up"},{"id":"a12","path":[[15,9],[14,9],[14,8],[15,8],[16,8],[16,7]],"direction":"up"},{"id":"a13","path":[[19,12],[19,11],[19,10],[18,10],[18,11],[17,11],[17,10],[16,10],[16,9]],"direction":"up"},{"id":"a14","path":[[14,10],[15,10]],"direction":"right"},{"id":"a15","path":[[6,6],[7,6],[7,7],[8,7],[8,8],[8,9],[8,10],[9,10],[10,10]],"direction":"right"},{"id":"a16","path":[[6,12],[6,11],[6,10],[7,10]],"direction":"right"},{"id":"a17","path":[[5,11],[5,12],[5,13],[4,13],[4,12],[4,11],[4,10],[5,10]],"direction":"right"},{"id":"a18","path":[[0,8],[0,9],[0,10],[0,11],[1,11],[1,10],[2,10],[3,10]],"direction":"right"},{"id":"a19","path":[[2,8],[1,8]],"direction":"left"},{"id":"a20","path":[[5,8],[4,8],[3,8]],"direction":"left"},{"id":"a21","path":[[1,9],[2,9],[3,9],[4,9],[5,9],[6,9],[7,9],[7,8],[6,8]],"direction":"left"},{"id":"a22","path":[[10,8],[10,9],[9,9]],"direction":"left"},{"id":"a23","path":[[13,5],[13,6],[13,7],[13,8],[13,9],[12,9]],"direction":"left"},{"id":"a24","path":[[18,7],[17,7],[17,8],[18,8],[19,8],[19,9],[18,9],[17,9]],"direction":"left"},{"id":"a25","path":[[17,13],[17,12]],"direction":"up"},{"id":"a26","path":[[15,13],[15,14],[16,14],[16,15],[16,16],[17,16],[17,15],[17,14]],"direction":"up"},{"id":"a27","path":[[19,16],[18,16],[18,17],[18,18],[17,18],[17,17]],"direction":"up"},{"id":"a28","path":[[14,14],[13,14],[13,15],[13,16],[14,16],[15,16]],"direction":"right"},{"id":"a29","path":[[8,5],[8,4],[8,3],[9,3]],"direction":"right"},{"id":"a30","path":[[4,3],[5,3],[6,3],[7,3]],"direction":"right"},{"id":"a31","path":[[2,1],[2,2],[2,3],[3,3]],"direction":"right"},{"id":"a32","path":[[0,1],[0,0],[1,0],[1,1],[1,2],[0,2],[0,3],[1,3]],"direction":"right"},{"id":"a33","path":[[4,1],[3,1]],"direction":"left"},{"id":"a34","path":[[7,0],[8,0],[8,1],[7,1],[6,1],[5,1]],"direction":"left"},{"id":"a35","path":[[14,0],[13,0],[13,1],[13,2],[14,2],[15,2]],"direction":"right"},{"id":"a36","path":[[15,7],[15,6],[15,5],[15,4]],"direction":"up"},{"id":"a37","path":[[15,12],[15,11]],"direction":"up"},{"id":"a38","path":[[13,12],[13,13],[14,13],[14,12]],"direction":"up"},{"id":"a39","path":[[16,13],[16,12],[16,11]],"direction":"up"},{"id":"a40","path":[[19,19],[18,19],[17,19],[16,19],[16,18],[16,17]],"direction":"up"},{"id":"a41","path":[[18,14],[18,15]],"direction":"down"},{"id":"a42","path":[[18,12],[18,13]],"direction":"down"},{"id":"a43","path":[[18,4],[18,5],[18,6]],"direction":"down"},{"id":"a44","path":[[12,4],[13,4]],"direction":"right"},{"id":"a45","path":[[14,18],[13,18],[13,17]],"direction":"up"},{"id":"a46","path":[[19,7],[19,6]],"direction":"up"},{"id":"a47","path":[[19,15],[19,14],[19,13]],"direction":"up"},{"id":"a48","path":[[14,15],[15,15]],"direction":"right"},{"id":"a49","path":[[9,13],[8,13],[8,12],[8,11],[9,11],[10,11]],"direction":"right"},{"id":"a50","path":[[3,12],[3,11],[2,11]],"direction":"left"},{"id":"a51","path":[[0,4],[0,5],[0,6],[1,6],[1,5],[1,4]],"direction":"up"},{"id":"a52","path":[[3,5],[3,6],[2,6]],"direction":"left"},{"id":"a53","path":[[5,6],[4,6]],"direction":"left"},{"id":"a54","path":[[9,4],[9,5],[9,6],[8,6]],"direction":"left"},{"id":"a55","path":[[5,5],[4,5],[4,4],[5,4],[6,4],[7,4]],"direction":"right"},{"id":"a56","path":[[2,4],[3,4]],"direction":"right"},{"id":"a57","path":[[6,0],[5,0],[4,0],[3,0],[2,0]],"direction":"left"},{"id":"a58","path":[[19,18],[19,17]],"direction":"up"},{"id":"a59","path":[[14,17],[15,17]],"direction":"right"},{"id":"a60","path":[[13,19],[14,19],[15,19],[15,18]],"direction":"up"},{"id":"a61","path":[[11,19],[12,19]],"direction":"right"},{"id":"a62","path":[[12,16],[12,17],[12,18]],"direction":"down"},{"id":"a63","path":[[7,15],[8,15],[8,16],[9,16],[10,16]],"direction":"right"},{"id":"a64","path":[[6,14],[5,14],[4,14],[4,15],[5,15],[6,15],[6,16],[7,16]],"direction":"right"},{"id":"a65","path":[[3,17],[3,16],[4,16],[5,16]],"direction":"right"},{"id":"a66","path":[[2,18],[2,17],[1,17],[1,16],[2,16]],"direction":"right"},{"id":"a67","path":[[10,6],[10,5]],"direction":"up"},{"id":"a68","path":[[9,14],[9,15],[10,15],[10,14]],"direction":"up"},{"id":"a69","path":[[6,18],[6,19],[7,19],[8,19],[9,19],[10,19],[10,18]],"direction":"up"},{"id":"a70","path":[[8,17],[7,17],[7,18]],"direction":"down"},{"id":"a71","path":[[5,19],[5,18],[4,18],[4,17],[5,17],[6,17]],"direction":"right"},{"id":"a72","path":[[0,19],[1,19],[2,19],[3,19],[4,19]],"direction":"right"},{"id":"a73","path":[[3,15],[3,14],[2,14],[2,15]],"direction":"down"},{"id":"a74","path":[[6,5],[7,5]],"direction":"right"},{"id":"a75","path":[[9,0],[9,1],[9,2]],"direction":"down"},{"id":"a76","path":[[12,12],[12,13],[12,14],[12,15]],"direction":"down"},{"id":"a77","path":[[6,13],[7,13],[7,14],[8,14]],"direction":"right"},{"id":"a78","path":[[0,14],[1,14],[1,13],[1,12],[2,12],[2,13],[3,13]],"direction":"right"},{"id":"a79","path":[[12,6],[12,7],[12,8]],"direction":"down"},{"id":"a80","path":[[12,0],[12,1],[12,2]],"direction":"down"},{"id":"a81","path":[[5,2],[6,2],[7,2],[8,2]],"direction":"right"},{"id":"a82","path":[[3,2],[4,2]],"direction":"right"},{"id":"a83","path":[[0,7],[1,7],[2,7],[3,7],[4,7],[5,7],[6,7]],"direction":"right"},{"id":"a84","path":[[0,13],[0,12]],"direction":"up"},{"id":"a85","path":[[7,12],[7,11]],"direction":"up"},{"id":"a86","path":[[1,18],[0,18],[0,17],[0,16],[0,15],[1,15]],"direction":"right"}],"timeLimitMs":170000,"obstacles":[[2,5],[11,18],[3,18]]},"20:4":{"number":30,"width":20,"height":20,"seed":92030,"generatorVersion":4,"profileVersion":8,"lifeLimit":3,"arrows":[{"id":"a0","path":[[3,18],[2,18],[2,19],[1,19],[0,19]],"direction":"left"},{"id":"a1","path":[[4,15],[3,15],[2,15],[2,16],[2,17]],"direction":"down"},{"id":"a2","path":[[3,14],[3,13],[2,13],[2,14]],"direction":"down"},{"id":"a3","path":[[5,9],[4,9],[4,10],[4,11],[3,11],[2,11],[2,12]],"direction":"down"},{"id":"a4","path":[[1,11],[1,10],[1,9],[2,9],[2,10]],"direction":"down"},{"id":"a5","path":[[2,5],[1,5],[0,5],[0,6],[0,7],[1,7],[2,7],[2,8]],"direction":"down"},{"id":"a6","path":[[6,8],[5,8],[4,8],[4,7],[3,7]],"direction":"left"},{"id":"a7","path":[[6,6],[6,7],[5,7]],"direction":"left"},{"id":"a8","path":[[8,5],[7,5],[7,6],[8,6],[8,7],[7,7]],"direction":"left"},{"id":"a9","path":[[13,10],[12,10],[11,10],[10,10],[10,9],[10,8],[10,7],[9,7]],"direction":"left"},{"id":"a10","path":[[13,8],[13,9],[12,9],[11,9],[11,8],[12,8],[12,7],[11,7]],"direction":"left"},{"id":"a11","path":[[16,8],[17,8],[17,7],[16,7],[15,7],[14,7],[13,7]],"direction":"left"},{"id":"a12","path":[[19,3],[19,4],[19,5],[19,6],[19,7],[18,7]],"direction":"left"},{"id":"a13","path":[[15,5],[16,5],[17,5],[18,5]],"direction":"right"},{"id":"a14","path":[[12,6],[13,6],[13,5],[14,5]],"direction":"right"},{"id":"a15","path":[[10,5],[10,6],[11,6],[11,5],[12,5]],"direction":"right"},{"id":"a16","path":[[17,2],[17,3],[17,4],[18,4]],"direction":"right"},{"id":"a17","path":[[15,3],[15,4],[16,4]],"direction":"right"},{"id":"a18","path":[[4,5],[4,6],[3,6],[2,6],[1,6]],"direction":"left"},{"id":"a19","path":[[1,4],[0,4],[0,3],[1,3],[2,3],[2,4]],"direction":"down"},{"id":"a20","path":[[0,0],[1,0],[2,0],[3,0],[4,0],[4,1],[4,2],[4,3],[3,3]],"direction":"left"},{"id":"a21","path":[[1,2],[2,2],[3,2],[3,1]],"direction":"up"},{"id":"a22","path":[[3,5],[3,4]],"direction":"up"},{"id":"a23","path":[[3,10],[3,9],[3,8]],"direction":"up"},{"id":"a24","path":[[0,2],[0,1]],"direction":"up"},{"id":"a25","path":[[2,1],[1,1]],"direction":"left"},{"id":"a26","path":[[9,2],[8,2],[7,2],[7,1],[6,1],[5,1]],"direction":"left"},{"id":"a27","path":[[11,2],[10,2],[10,1],[10,0],[9,0],[9,1],[8,1]],"direction":"left"},{"id":"a28","path":[[10,3],[11,3],[12,3],[13,3],[13,2],[13,1],[12,1],[11,1]],"direction":"left"},{"id":"a29","path":[[16,1],[15,1],[14,1]],"direction":"left"},{"id":"a30","path":[[18,3],[18,2],[18,1],[17,1]],"direction":"left"},{"id":"a31","path":[[6,4],[6,3],[5,3]],"direction":"left"},{"id":"a32","path":[[7,4],[8,4],[9,4],[9,3],[8,3],[7,3]],"direction":"left"},{"id":"a33","path":[[9,6],[9,5]],"direction":"up"},{"id":"a34","path":[[8,11],[8,10],[8,9],[9,9],[9,8]],"direction":"up"},{"id":"a35","path":[[10,11],[9,11],[9,10]],"direction":"up"},{"id":"a36","path":[[10,14],[10,13],[9,13],[9,12]],"direction":"up"},{"id":"a37","path":[[11,17],[10,17],[9,17],[9,16],[9,15],[9,14]],"direction":"up"},{"id":"a38","path":[[13,18],[13,19],[12,19],[11,19],[10,19],[9,19],[9,18]],"direction":"up"},{"id":"a39","path":[[12,15],[13,15],[13,16],[13,17]],"direction":"down"},{"id":"a40","path":[[12,12],[13,12],[13,13],[13,14]],"direction":"down"},{"id":"a41","path":[[1,17],[1,18]],"direction":"down"},{"id":"a42","path":[[0,15],[0,14],[1,14],[1,15],[1,16]],"direction":"down"},{"id":"a43","path":[[7,13],[7,14],[8,14],[8,15],[8,16],[7,16],[7,15],[6,15],[5,15]],"direction":"left"},{"id":"a44","path":[[11,15],[10,15]],"direction":"left"},{"id":"a45","path":[[14,17],[14,16],[15,16],[15,15],[14,15]],"direction":"left"},{"id":"a46","path":[[18,17],[17,17],[17,16],[17,15],[16,15]],"direction":"left"},{"id":"a47","path":[[17,12],[17,13],[18,13],[19,13],[19,14],[19,15],[18,15]],"direction":"left"},{"id":"a48","path":[[16,9],[16,10],[16,11],[16,12],[15,12],[15,13],[16,13]],"direction":"right"},{"id":"a49","path":[[5,4],[4,4]],"direction":"left"},{"id":"a50","path":[[12,4],[11,4],[10,4]],"direction":"left"},{"id":"a51","path":[[6,2],[5,2]],"direction":"left"},{"id":"a52","path":[[14,11],[14,12],[14,13],[14,14],[15,14],[16,14],[17,14],[18,14]],"direction":"right"},{"id":"a53","path":[[10,12],[11,12],[11,13],[12,13]],"direction":"right"},{"id":"a54","path":[[11,14],[12,14]],"direction":"right"},{"id":"a55","path":[[3,12],[4,12],[4,13],[4,14],[5,14],[6,14]],"direction":"right"},{"id":"a56","path":[[3,16],[3,17],[4,17],[4,16]],"direction":"up"},{"id":"a57","path":[[0,13],[0,12],[1,12],[1,13]],"direction":"down"},{"id":"a58","path":[[5,10],[5,11],[5,12],[6,12],[6,13],[5,13]],"direction":"left"},{"id":"a59","path":[[8,13],[8,12],[7,12]],"direction":"left"},{"id":"a60","path":[[18,10],[18,11],[19,11],[19,12],[18,12]],"direction":"left"},{"id":"a61","path":[[0,16],[0,17],[0,18]],"direction":"down"},{"id":"a62","path":[[1,8],[0,8],[0,9],[0,10],[0,11]],"direction":"down"},{"id":"a63","path":[[6,11],[7,11],[7,10],[7,9],[6,9]],"direction":"left"},{"id":"a64","path":[[13,11],[12,11],[11,11]],"direction":"left"},{"id":"a65","path":[[4,18],[4,19],[3,19]],"direction":"left"},{"id":"a66","path":[[5,17],[6,17],[7,17],[7,18],[7,19],[6,19],[5,19]],"direction":"left"},{"id":"a67","path":[[8,8],[7,8]],"direction":"left"},{"id":"a68","path":[[14,10],[14,9],[15,9],[15,8],[14,8]],"direction":"left"},{"id":"a69","path":[[19,10],[19,9],[19,8],[18,8],[18,9],[17,9]],"direction":"left"},{"id":"a70","path":[[8,0],[7,0],[6,0],[5,0]],"direction":"left"},{"id":"a71","path":[[17,0],[16,0],[15,0],[14,0],[13,0],[12,0],[11,0]],"direction":"left"},{"id":"a72","path":[[19,2],[19,1],[19,0],[18,0]],"direction":"left"},{"id":"a73","path":[[6,18],[5,18]],"direction":"left"},{"id":"a74","path":[[8,19],[8,18],[8,17]],"direction":"up"},{"id":"a75","path":[[11,18],[10,18]],"direction":"left"},{"id":"a76","path":[[16,19],[15,19],[14,19]],"direction":"left"},{"id":"a77","path":[[18,18],[18,19],[17,19]],"direction":"left"},{"id":"a78","path":[[5,6],[5,5],[6,5]],"direction":"right"},{"id":"a79","path":[[18,6],[17,6],[16,6],[15,6],[14,6]],"direction":"left"},{"id":"a80","path":[[17,11],[17,10]],"direction":"up"},{"id":"a81","path":[[14,4],[14,3],[14,2]],"direction":"up"},{"id":"a82","path":[[6,16],[5,16]],"direction":"left"},{"id":"a83","path":[[12,17],[12,16],[11,16],[10,16]],"direction":"left"},{"id":"a84","path":[[16,16],[16,17],[15,17]],"direction":"left"},{"id":"a85","path":[[19,19],[19,18],[19,17],[19,16],[18,16]],"direction":"left"},{"id":"a86","path":[[14,18],[15,18],[16,18],[17,18]],"direction":"right"},{"id":"a87","path":[[15,10],[15,11]],"direction":"down"},{"id":"a88","path":[[15,2],[16,2],[16,3]],"direction":"down"}],"timeLimitMs":160000,"obstacles":[[13,4],[12,2],[6,10],[12,18]]}};
 
 },
 "src/ui/view.js":function(module,exports,require){
@@ -2501,6 +8455,7 @@ module.exports = [
 const { drawBoard } = require("src/rendering/board.js");
 const { CONFIG, profileIndex } = require("src/config.js");
 const { fixtures } = require("src/fixtures.js");
+const { Viewport } = require("src/input/viewport.js");
 const COLORS = { bg: '#f5f3eb', paper: '#fffef9', ink: '#263f36', muted: '#7b8579', line: '#dfe4d8', green: '#397356', mint: '#e5eddf', red: '#ae5949' };
 function rounded(ctx, x, y, w, h, r, fill, stroke) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); if (fill) {
     ctx.fillStyle = fill;
@@ -2522,7 +8477,7 @@ function wrap(ctx, value, maxWidth, size = 15) { ctx.font = `${size}px sans-seri
     lines.push(line); return lines; }
 function layout(info) { const width = info.width, height = info.height; const top = Math.max(info.safeTop || 0, info.menuBottom || 0) + 12, bottom = height - (info.safeBottom || 0) - 16; const boardSize = Math.max(120, Math.min(width - 32, bottom - top - 220)); return { width, height, top, bottom, board: { x: (width - boardSize) / 2 + 10, y: top + 142, width: boardSize - 20, height: boardSize - 20 }, card: { x: (width - boardSize) / 2, y: top + 132, width: boardSize, height: boardSize } }; }
 class View {
-    constructor(ctx) { this.ctx = ctx; this.buttons = []; this.transform = null; this.lastLayout = null; }
+    constructor(ctx) { this.ctx = ctx; this.buttons = []; this.transform = null; this.lastLayout = null; this.camera = new Viewport(); this.cameraLevel = null; }
     button(id, label, x, y, w, h = 48, primary = false) { const c = this.ctx; rounded(c, x, y, w, h, 14, primary ? COLORS.ink : COLORS.paper, primary ? null : COLORS.line); text(c, label, x + w / 2, y + h / 2, 15, primary ? COLORS.paper : COLORS.ink, 'center', 500); this.buttons.push({ id, label, x, y, width: w, height: h }); }
     render(app, info) {
         const c = this.ctx, l = layout(info);
@@ -2556,7 +8511,10 @@ class View {
         const by = Math.min(l.bottom - 123, Math.max(y + size + 36, l.top + usable * .73));
         text(c, '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关 · ' + CONFIG.profiles[profileIndex(app.currentLevel)].name, w / 2, by - 24, 13, COLORS.muted, 'center');
         this.button('start', app.session ? '继续游戏' : '开始游戏', 32, by, w - 64, 54, true);
-        this.button('settings', '声音与震动', w / 2 - 72, by + 68, 144, 44);
+        const secondaryWidth = (w - 76) / 2;
+        this.button('settings', '设置', 32, by + 68, secondaryWidth, 44);
+        if (!app.retryRead)
+            this.button('reset-progress-ask', '重置关卡进度', 44 + secondaryWidth, by + 68, secondaryWidth, 44);
         if (app.recoveryNotice && !app.savedError)
             text(c, app.recoveryNotice, w / 2, l.bottom + 3, 11, COLORS.red, 'center');
     }
@@ -2568,6 +8526,11 @@ class View {
         const s = app.session;
         text(c, '剩余箭头', 26, l.top + 80, 12, COLORS.muted);
         text(c, s ? s.remaining : '—', 26, l.top + 108, 27, COLORS.ink, 'left', 500);
+        if (s?.remainingMs != null) {
+            const seconds = Math.ceil(s.remainingMs / 1000);
+            text(c, '剩余时间', w / 2, l.top + 80, 12, COLORS.muted, 'center');
+            text(c, Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0'), w / 2, l.top + 108, 23, seconds <= 30 ? COLORS.red : COLORS.ink, 'center');
+        }
         if (s?.lives !== null && s) {
             text(c, '剩余机会', w - 26, l.top + 80, 12, COLORS.muted, 'right');
             text(c, '♥'.repeat(s.lives) + '♡'.repeat(s.level.lifeLimit - s.lives), w - 26, l.top + 108, 23, COLORS.green, 'right');
@@ -2586,7 +8549,11 @@ class View {
                 colors.set(f.blocker.id, COLORS.red);
                 offsets.set(id, Math.sin((f.until - s.time) / 16) * 2.5);
             }
-            this.transform = drawBoard(c, s.level, l.board, { removed: s.removed, paths: s.paths(), colors, offsets, grid: !!app.debugGrid });
+            if (this.cameraLevel !== s.level) { this.camera.reset(); this.cameraLevel = s.level; }
+            this.camera.update(l.board);
+            c.save(); c.beginPath(); c.rect(l.board.x, l.board.y, l.board.width, l.board.height); c.clip();
+            this.transform = drawBoard(c, s.level, this.camera.boardRect(), { removed: s.removed, paths: s.paths(), colors, offsets, grid: !!app.debugGrid });
+            c.restore();
             if (app.tutorialStep === 1) {
                 const a = s.level.arrows.find(a => a.id === 'first'), p = this.transform.toScreen(a.path[a.path.length - 1]);
                 c.strokeStyle = COLORS.green;
@@ -2599,8 +8566,11 @@ class View {
             rounded(c, 32, py, w - 64, 3, 1.5, COLORS.line);
             if (progress > 0)
                 rounded(c, 32, py, (w - 64) * progress, 3, 1.5, COLORS.green);
-            const message = app.message || (app.tutorialStep === 1 ? '点击圈中的箭头，沿方向移出棋盘' : '点击箭头，沿方向移出棋盘');
+            const message = app.message || (app.tutorialStep === 1 ? '点击圈中的箭头，沿方向移出棋盘' : this.camera.zoom > 1 ? '拖动查看棋盘，轻点箭头消除' : '箭头太小？点击放大后操作');
             wrap(c, message, w - 42, 13).forEach((v, i) => text(c, v, w / 2, py + 30 + i * 20, 13, app.message ? COLORS.green : COLORS.muted, 'center'));
+            if (s.level.number >= 3) {
+                this.button(this.camera.zoom < 3 ? 'zoom-in' : 'zoom-reset', this.camera.zoom === 1 ? '放大' : this.camera.zoom === 2 ? '再放大' : '全图', w - 84, l.top, 68, 44);
+            }
         }
         else {
             text(c, app.loadError ? '暂时没有准备好' : '正在铺好棋盘…', w / 2, l.card.y + l.card.height / 2 - 16, 16, COLORS.muted, 'center');
@@ -2620,7 +8590,7 @@ class View {
             case 'pause':
                 title = '歇一会儿';
                 description = '棋盘会在这里等你。';
-                actions = [['resume', '继续游戏', true], ['restart-ask', '重新开始'], ['settings', '声音与震动'], ['home', '返回首页']];
+                actions = [['resume', '继续游戏', true], ['restart-ask', '重新开始'], ['settings', '设置'], ['home', '返回首页']];
                 break;
             case 'restart':
                 title = '重新开始本关？';
@@ -2634,18 +8604,28 @@ class View {
                 break;
             case 'failed':
                 title = '再试一次';
-                description = '本次机会已用完。先观察出口，再慢慢解开。';
+                description = app.session?.failureReason === 'timeout' ? '时间到了。重新挑战会恢复完整时间和 3 次机会。' : '本次机会已用完。先观察出口，再慢慢解开。';
                 actions = [['restart', '重新挑战', true], ['home', '返回首页']];
                 break;
             case 'settings':
-                title = '声音与震动';
+                title = '设置';
                 description = '按你喜欢的方式，安静地解谜。';
-                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ['settings-done', '完成', true]];
+                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ...(!app.retryRead ? [['reset-progress-ask', '重置关卡进度']] : []), ['settings-done', '完成', true]];
+                break;
+            case 'reset-progress':
+                title = '重置关卡进度？';
+                description = '清除闯关进度，回到第 1 关。保留音效和震动设置。';
+                actions = [['reset-progress-cancel', '取消', true], ['reset-progress-confirm', '确认重置']];
                 break;
             case 'life-intro':
                 title = '多一点挑战';
-                description = '从本关开始，点击被挡住的箭头会消耗一次机会。机会用完后，可以重新挑战。';
+                description = '从第 3 关起，每关有 3 次机会。点错扣 1 次，第 3 次点错即失败；正确消除不扣次数。';
                 actions = [['life-accept', '知道了，开始', true]];
+                break;
+            case 'challenge-intro':
+                title = app.currentLevel === 15 ? '石块出现了' : '限时挑战';
+                description = app.currentLevel === 15 ? '灰色石块无法消除，会挡住路线。清空全部箭头即可通关。' : '本关限时 180 秒。时间归零或点错 3 次即失败；暂停和切后台时停止计时。';
+                actions = [['challenge-accept', '开始挑战', true]];
                 break;
         }
         const boxWidth = Math.min(w - 40, 340), lines = wrap(c, description, boxWidth - 48), boxHeight = 106 + lines.length * 23 + actions.length * 58 + 12, x = (w - boxWidth) / 2, y = Math.max(l.top, (l.height - boxHeight) / 2);
@@ -2661,6 +8641,21 @@ module.exports = { View, layout, COLORS, rounded, text };
 },
 "src/rendering/board.js":function(module,exports,require){
 'use strict';
+function trimShaft(points, distance) {
+    const result = points.map(p => p.slice());
+    while (result.length > 1) {
+        const end = result[result.length - 1], previous = result[result.length - 2];
+        const length = Math.hypot(end[0] - previous[0], end[1] - previous[1]);
+        if (length <= distance) {
+            distance -= length;
+            result.pop();
+        } else {
+            result[result.length - 1] = [end[0] + (previous[0] - end[0]) * distance / length, end[1] + (previous[1] - end[1]) * distance / length];
+            break;
+        }
+    }
+    return result;
+}
 function drawArrow(ctx, points, direction, color = '#283b37', width = 3.2, unit = 24) {
     if (points.length < 2)
         return;
@@ -2669,14 +8664,18 @@ function drawArrow(ctx, points, direction, color = '#283b37', width = 3.2, unit 
     ctx.lineWidth = width;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(points[0][0], points[0][1]);
-    for (const p of points.slice(1))
-        ctx.lineTo(p[0], p[1]);
-    ctx.stroke();
+    const length = Math.min(unit * .30, 10), half = length * .58;
+    // Keep the rounded shaft cap inside the filled arrowhead, including at small cell sizes.
+    const shaft = trimShaft(points, length * .7 + width / 2);
+    if (shaft.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(shaft[0][0], shaft[0][1]);
+        for (const p of shaft.slice(1))
+            ctx.lineTo(p[0], p[1]);
+        ctx.stroke();
+    }
     const h = points[points.length - 1];
     const d = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[direction];
-    const length = Math.min(unit * .30, 10), half = length * .58;
     ctx.beginPath();
     ctx.moveTo(h[0] + d[0] * length * .25, h[1] + d[1] * length * .25);
     ctx.lineTo(h[0] - d[0] * length - d[1] * half, h[1] - d[1] * length + d[0] * half);
@@ -2705,6 +8704,12 @@ function drawBoard(ctx, level, rect, options = {}) {
                 ctx.fillRect(p[0] - 1, p[1] - 1, 2, 2);
             }
     }
+    for (const p of level.obstacles || []) {
+        const s = t.toScreen(p), size = t.cell * .7;
+        ctx.fillStyle = '#88918b'; ctx.fillRect(s[0] - size / 2, s[1] - size / 2, size, size);
+        ctx.strokeStyle = '#fffef9'; ctx.lineWidth = Math.max(1, t.cell * .06);
+        ctx.beginPath(); ctx.moveTo(s[0] - size * .2, s[1] - size * .2); ctx.lineTo(s[0] + size * .2, s[1] + size * .2); ctx.moveTo(s[0] + size * .2, s[1] - size * .2); ctx.lineTo(s[0] - size * .2, s[1] + size * .2); ctx.stroke();
+    }
     for (const a of level.arrows) {
         if (options.removed?.has(a.id))
             continue;
@@ -2716,6 +8721,21 @@ function drawBoard(ctx, level, rect, options = {}) {
     return t;
 }
 module.exports = { drawArrow, boardTransform, drawBoard };
+
+},
+"src/input/viewport.js":function(module,exports,require){
+'use strict';
+class Viewport {
+    constructor() { this.zoom = 1; this.x = this.y = 0; this.rect = null; }
+    update(rect) { this.rect = rect; this.clamp(); }
+    clamp() { if (!this.rect) return; const maxX = this.rect.width * (this.zoom - 1) / 2, maxY = this.rect.height * (this.zoom - 1) / 2; this.x = Math.max(-maxX, Math.min(maxX, this.x)); this.y = Math.max(-maxY, Math.min(maxY, this.y)); }
+    change(delta) { const before = this.zoom; this.zoom = Math.max(1, Math.min(3, this.zoom + delta)); this.x *= this.zoom / before; this.y *= this.zoom / before; this.clamp(); }
+    reset() { this.zoom = 1; this.x = this.y = 0; }
+    pan(dx, dy) { this.x += dx; this.y += dy; this.clamp(); }
+    contains(x, y) { const r = this.rect; return !!r && x >= r.x && y >= r.y && x <= r.x + r.width && y <= r.y + r.height; }
+    boardRect() { const r = this.rect; return { x: r.x - r.width * (this.zoom - 1) / 2 + this.x, y: r.y - r.height * (this.zoom - 1) / 2 + this.y, width: r.width * this.zoom, height: r.height * this.zoom }; }
+}
+module.exports = { Viewport };
 
 },
 "src/input/pointer.js":function(module,exports,require){
@@ -2761,6 +8781,7 @@ module.exports = { hitArrow, Pointer };
 'use strict';
 const { clone, validateLevel } = require("src/domain/board.js");
 const { Session } = require("src/domain/session.js");
+const { lifeLimit } = require("src/config.js");
 const { solve } = require("src/generation/validate.js");
 const KEY = 'arrow-garden.save.v1', BACKUP = KEY + '.backup';
 function checksum(value) { let n = 2166136261; for (let i = 0; i < value.length; i++) {
@@ -2772,6 +8793,8 @@ function snapshot(app) {
     if (app.session) {
         const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
         session = { level: clone(s.level), removed, lives: s.lives, state: s.state === 'failed' ? 'failed' : removed.length === s.level.arrows.length ? 'won' : 'playing' };
+        session.remainingMs = s.remainingMs;
+        session.failureReason = s.failureReason;
     }
     return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, session };
 }
@@ -2791,8 +8814,10 @@ function validate(data) {
         return false;
     if (!['playing', 'won', 'failed'].includes(s.state))
         return false;
+    if (s.level.timeLimitMs != null && (!Number.isFinite(s.remainingMs) || s.remainingMs < 0 || s.remainingMs > s.level.timeLimitMs)) return false;
     if (s.state === 'failed')
-        return s.lives === 0;
+        return s.lives === 0 || s.failureReason === 'timeout' && s.level.timeLimitMs != null && s.remainingMs === 0;
+    if (s.level.timeLimitMs != null && s.remainingMs === 0) return false;
     if (s.lives === 0)
         return false;
     return (s.state === 'won') === (s.removed.length === ids.size);
@@ -2813,7 +8838,7 @@ function recoverOriginal(raw) {
         const envelope = JSON.parse(raw), data = JSON.parse(envelope.payload), level = data.session?.level;
         if (!validateLevel(level).valid || !solve(level).valid || !validProgress(level.number))
             return null;
-        return { version: 1, currentLevel: level.number, unlocked: level.number, settings: { sound: true, vibration: true }, tutorialDone: level.number > 1, lifeIntroDone: false, session: { level, removed: [], lives: level.lifeLimit, state: 'playing' } };
+        return { version: 1, currentLevel: level.number, unlocked: level.number, settings: { sound: true, vibration: true }, tutorialDone: level.number > 1, lifeIntroDone: false, session: { level, removed: [], lives: level.lifeLimit, remainingMs: level.timeLimitMs ?? null, state: 'playing' } };
     }
     catch {
         return null;
@@ -2845,7 +8870,13 @@ function restore(app, data) {
         app.session = new Session(state.level);
         app.session.removed = new Set(state.removed);
         app.session.lives = state.lives;
+        if (state.level.lifeLimit === null && lifeLimit(state.level.number) !== null) {
+            app.session.level.lifeLimit = lifeLimit(state.level.number);
+            app.session.lives = app.session.level.lifeLimit;
+        }
         app.session.state = state.state;
+        app.session.remainingMs = state.remainingMs ?? state.level.timeLimitMs ?? null;
+        app.session.failureReason = state.failureReason || (state.state === 'failed' ? 'lives' : null);
         app.tutorialStep = state.level.number === 1 && !app.tutorialDone ? 1 : 0;
     }
     app.screen = 'home';

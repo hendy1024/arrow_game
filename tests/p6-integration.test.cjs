@@ -8,7 +8,7 @@ test('P6 30关连续解完，没有死锁或错误扣生命', () => { let remove
     const r = generate(n, 71000 + n), s = new Session(r.level);
     for (const id of r.validation.sequence) {
         assert.equal(s.click(id).type, 'allowed');
-        s.tick(10000);
+        s.tick(require('../src/movement/path').completionDistance(r.level.arrows.find(a => a.id === id), r.level) * 1000 / require('../src/config').CONFIG.speed + .001);
         removed++;
     }
     assert.equal(s.state, 'won');
@@ -34,3 +34,4 @@ test('P6 随机并行操作不发生穿越或永久锁死', () => { const { occu
 } });
 test('P6 微信构建无浏览器入口、调试对象及外部依赖，资源齐全', () => { const { build } = require('../scripts/build.cjs'); build(); const source = fs.readFileSync('dist/wechat/game.js', 'utf8'); new vm.Script(source); assert.ok(!source.includes('__arrowDebug')); assert.ok(!source.includes('document.querySelector')); assert.ok(!source.includes('window.localStorage')); for (const kind of ['removed', 'blocked', 'won'])
     assert.ok(fs.statSync('dist/wechat/assets/' + kind + '.wav').size > 44); const cfg = JSON.parse(fs.readFileSync('project.config.json')); assert.equal(cfg.appid, 'wx47e5456f2f4f5ade'); assert.equal(cfg.compileType, 'game'); assert.ok(fs.statSync('dist/wechat/game.js').size < 1024 * 1024); });
+

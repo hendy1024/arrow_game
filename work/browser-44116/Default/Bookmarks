@@ -1,0 +1,105 @@
+{
+   "checksum": "1acc4caa30069c894f362ecd17215613",
+   "roots": {
+      "bookmark_bar": {
+         "children": [ {
+            "date_added": "13385291200000000",
+            "date_last_used": "0",
+            "guid": "955db314-4221-4b5d-8249-2a4b715f589c",
+            "id": "7",
+            "name": "影音娱乐",
+            "show_icon": false,
+            "source": "import_fre",
+            "type": "url",
+            "url": "http://yule.tmdh725.com/",
+            "visit_count": 0
+         }, {
+            "date_added": "13385291194000000",
+            "date_last_used": "0",
+            "guid": "2d9085f4-d2c8-408d-8798-045413f6455a",
+            "id": "8",
+            "name": "热点新闻",
+            "show_icon": false,
+            "source": "import_fre",
+            "type": "url",
+            "url": "http://news.tmdh725.com/",
+            "visit_count": 0
+         }, {
+            "date_added": "13385291152000000",
+            "date_last_used": "0",
+            "guid": "f5096edb-7b24-49d6-b4ba-d26ebd4e5dfb",
+            "id": "9",
+            "name": "百度搜索",
+            "show_icon": false,
+            "source": "import_fre",
+            "type": "url",
+            "url": "http://bd.tmdh725.com/",
+            "visit_count": 0
+         }, {
+            "date_added": "13385291128000000",
+            "date_last_used": "0",
+            "guid": "33b7cd25-ccdf-43bb-ba05-b9e82f1414c0",
+            "id": "10",
+            "name": "老毛桃官网",
+            "show_icon": false,
+            "source": "import_fre",
+            "type": "url",
+            "url": "http://www.laomaotao.net/",
+            "visit_count": 0
+         }, {
+            "date_added": "13385291162000000",
+            "date_last_used": "0",
+            "guid": "701d48be-84b1-4e9a-9a6e-bc24fc3a41b9",
+            "id": "11",
+            "name": "轻松办公",
+            "show_icon": false,
+            "source": "import_fre",
+            "type": "url",
+            "url": "http://wk.tmdh725.com/",
+            "visit_count": 0
+         } ],
+         "date_added": "13433616462413624",
+         "date_last_used": "0",
+         "date_modified": "0",
+         "guid": "0bc5d13f-2cba-5d74-951f-3f233fe6c908",
+         "id": "1",
+         "name": "收藏夹栏",
+         "source": "unknown",
+         "type": "folder"
+      },
+      "other": {
+         "children": [  ],
+         "date_added": "13433616462413624",
+         "date_last_used": "0",
+         "date_modified": "0",
+         "guid": "82b081ec-3dd3-529c-8475-ab6c344590dd",
+         "id": "2",
+         "name": "其他收藏夹",
+         "source": "unknown",
+         "type": "folder"
+      },
+      "synced": {
+         "children": [  ],
+         "date_added": "13433616462413624",
+         "date_last_used": "0",
+         "date_modified": "0",
+         "guid": "4cf2e351-0e85-532b-bb37-df045d8f8d0f",
+         "id": "3",
+         "name": "移动收藏夹",
+         "source": "unknown",
+         "type": "folder"
+      },
+      "workspaces_v2": {
+         "children": [  ],
+         "date_added": "13433616462413624",
+         "date_last_used": "0",
+         "date_modified": "0",
+         "guid": "75aa6670-344f-549d-b742-660f029506ab",
+         "id": "5",
+         "name": "工作区",
+         "source": "unknown",
+         "type": "folder"
+      }
+   },
+   "version": 1
+}

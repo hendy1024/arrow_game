@@ -5,24 +5,27 @@ const { Pointer, hitArrow } = require('./input/pointer');
 const { bindPersistence } = require('./persistence/store');
 function mount(platform, options = {}) {
     const app = new Controller(platform, options), view = new View(platform.ctx), pointer = new Pointer();
-    let frameId = null, last = null, hidden = false;
+    let frameId = null, last = null, hidden = false, drag = null;
     if (platform.storage)
         bindPersistence(app, platform.storage);
     function render() { view.ctx = platform.ctx; view.render(app, platform.info()); }
     function frame(now) { if (hidden)
         return; const delta = last === null ? 0 : Math.max(0, now - last); last = now; app.tick(delta); render(); frameId = platform.requestFrame(frame); }
-    platform.listen({ start: (...args) => pointer.start(...args), move: (...args) => pointer.move(...args), end: (...args) => { const p = pointer.end(...args); if (!p)
+    platform.listen({ start: (id, x, y, count) => { pointer.start(id, x, y, count); if (count !== 1) { drag = null; return; } if (!app.modal && view.transform && view.camera.zoom > 1 && view.camera.contains(x, y)) drag = { id, x, y }; }, move: (id, x, y, count) => { pointer.move(id, x, y, count); if (count !== 1) { drag = null; return; } if (drag && drag.id === id && !app.modal && pointer.invalid) { view.camera.pan(x - drag.x, y - drag.y); drag.x = x; drag.y = y; render(); } }, end: (...args) => { const p = pointer.end(...args); drag = null; if (!p)
             return; const button = view.hitButton(...p); if (button) {
-            app.action(button);
+            if (button === 'zoom-in') view.camera.change(1);
+            else if (button === 'zoom-out') view.camera.change(-1);
+            else if (button === 'zoom-reset') view.camera.reset();
+            else app.action(button);
             render();
             return;
         } if (view.transform && !app.modal) {
             const t = view.transform;
-            if (p[0] < t.x || p[1] < t.y || p[0] > t.x + t.width || p[1] > t.y + t.height)
+            if (!view.camera.contains(...p))
                 return;
             app.clickArrow(hitArrow(app.session.level, t.toBoard(p), app.session.removed, app.session.paths()));
             render();
-        } }, cancel: () => pointer.cancel(), hide: () => { hidden = true; pointer.cancel(); platform.cancelFrame(frameId); last = null; if (app.session)
+        } }, cancel: () => { pointer.cancel(); drag = null; }, hide: () => { hidden = true; pointer.cancel(); drag = null; platform.cancelFrame(frameId); last = null; if (app.session)
             for (const id of [...app.session.moves.keys()])
                 app.session.complete(id); app.events(); app.session?.pause(); app.persist?.(); platform.stopFeedback?.(); }, show: () => { if (!hidden)
             return; hidden = false; last = null; if (app.session?.state === 'paused' && !app.modal)

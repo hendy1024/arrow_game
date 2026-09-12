@@ -6,12 +6,12 @@ const { Session } = require('../src/domain/session');
 const { CONFIG, profileIndex } = require('../src/config');
 function validateBatch(count = 200) {
     const report = { countPerTier: count, total: 0, failures: [], tiers: [] };
-    for (const n of [2, 4, 9, 16, 21]) {
+    for (const n of [1, 2, 3, 8, 13, 18]) {
         const rows = [];
         for (let i = 0; i < count; i++) {
             const seed = 110000 + n * 1000 + i, t = performance.now();
             try {
-                const r = generate(n, seed);
+                const r = generate(n, seed, { forceRandom: true });
                 const elapsed = performance.now() - t;
                 if (!r.validation.valid)
                     throw new Error('Invalid layout');
@@ -20,7 +20,7 @@ function validateBatch(count = 200) {
                 for (const id of r.validation.sequence) {
                     if (s.click(id).type !== 'allowed')
                         throw new Error('Solution disagrees with session');
-                    s.tick(10000);
+                    s.tick(require('../src/movement/path').completionDistance(r.level.arrows.find(a => a.id === id), r.level) * 1000 / CONFIG.speed + .001);
                 }
                 if (s.state !== 'won' || s.remaining !== 0)
                     throw new Error('Not cleared');
@@ -45,3 +45,5 @@ if (require.main === module) {
         process.exitCode = 1;
 }
 module.exports = { validateBatch };
+
+

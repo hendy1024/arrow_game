@@ -16,6 +16,13 @@ function validateLevel(level) {
     if (level.lifeLimit !== null && (!Number.isInteger(level.lifeLimit) || level.lifeLimit < 1))
         errors.push('invalid-life-limit');
     const ids = new Set(), occupied = new Map();
+    if (level.timeLimitMs != null && (!Number.isInteger(level.timeLimitMs) || level.timeLimitMs <= 0)) errors.push('invalid-time-limit');
+    if (level.obstacles !== undefined && !Array.isArray(level.obstacles)) return { valid: false, errors: ['invalid-obstacles'] };
+    for (const p of level.obstacles || []) {
+        if (!Array.isArray(p) || p.length !== 2 || !p.every(Number.isInteger) || !inside(p, level)) { errors.push('invalid-obstacle'); continue; }
+        if (occupied.has(key(p))) errors.push('overlap');
+        occupied.set(key(p), '@stone:' + key(p));
+    }
     for (const a of level.arrows) {
         if (!a || typeof a !== 'object') {
             errors.push('invalid-arrow');
@@ -63,6 +70,7 @@ function validateLevel(level) {
 }
 function occupancy(level, excluded = new Set()) {
     const map = new Map();
+    for (const p of level.obstacles || []) map.set(key(p), '@stone:' + key(p));
     for (const a of level.arrows)
         if (!excluded.has(a.id))
             for (const p of a.path)

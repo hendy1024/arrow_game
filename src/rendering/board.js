@@ -1,4 +1,19 @@
 'use strict';
+function trimShaft(points, distance) {
+    const result = points.map(p => p.slice());
+    while (result.length > 1) {
+        const end = result[result.length - 1], previous = result[result.length - 2];
+        const length = Math.hypot(end[0] - previous[0], end[1] - previous[1]);
+        if (length <= distance) {
+            distance -= length;
+            result.pop();
+        } else {
+            result[result.length - 1] = [end[0] + (previous[0] - end[0]) * distance / length, end[1] + (previous[1] - end[1]) * distance / length];
+            break;
+        }
+    }
+    return result;
+}
 function drawArrow(ctx, points, direction, color = '#283b37', width = 3.2, unit = 24) {
     if (points.length < 2)
         return;
@@ -7,14 +22,18 @@ function drawArrow(ctx, points, direction, color = '#283b37', width = 3.2, unit 
     ctx.lineWidth = width;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(points[0][0], points[0][1]);
-    for (const p of points.slice(1))
-        ctx.lineTo(p[0], p[1]);
-    ctx.stroke();
+    const length = Math.min(unit * .30, 10), half = length * .58;
+    // Keep the rounded shaft cap inside the filled arrowhead, including at small cell sizes.
+    const shaft = trimShaft(points, length * .7 + width / 2);
+    if (shaft.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(shaft[0][0], shaft[0][1]);
+        for (const p of shaft.slice(1))
+            ctx.lineTo(p[0], p[1]);
+        ctx.stroke();
+    }
     const h = points[points.length - 1];
     const d = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[direction];
-    const length = Math.min(unit * .30, 10), half = length * .58;
     ctx.beginPath();
     ctx.moveTo(h[0] + d[0] * length * .25, h[1] + d[1] * length * .25);
     ctx.lineTo(h[0] - d[0] * length - d[1] * half, h[1] - d[1] * length + d[0] * half);
@@ -42,6 +61,12 @@ function drawBoard(ctx, level, rect, options = {}) {
                 const p = t.toScreen([x, y]);
                 ctx.fillRect(p[0] - 1, p[1] - 1, 2, 2);
             }
+    }
+    for (const p of level.obstacles || []) {
+        const s = t.toScreen(p), size = t.cell * .7;
+        ctx.fillStyle = '#88918b'; ctx.fillRect(s[0] - size / 2, s[1] - size / 2, size, size);
+        ctx.strokeStyle = '#fffef9'; ctx.lineWidth = Math.max(1, t.cell * .06);
+        ctx.beginPath(); ctx.moveTo(s[0] - size * .2, s[1] - size * .2); ctx.lineTo(s[0] + size * .2, s[1] + size * .2); ctx.moveTo(s[0] + size * .2, s[1] - size * .2); ctx.lineTo(s[0] - size * .2, s[1] + size * .2); ctx.stroke();
     }
     for (const a of level.arrows) {
         if (options.removed?.has(a.id))

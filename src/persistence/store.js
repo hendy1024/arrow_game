@@ -1,6 +1,7 @@
 'use strict';
 const { clone, validateLevel } = require('../domain/board');
 const { Session } = require('../domain/session');
+const { lifeLimit } = require('../config');
 const { solve } = require('../generation/validate');
 const KEY = 'arrow-garden.save.v1', BACKUP = KEY + '.backup';
 function checksum(value) { let n = 2166136261; for (let i = 0; i < value.length; i++) {
@@ -12,6 +13,8 @@ function snapshot(app) {
     if (app.session) {
         const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
         session = { level: clone(s.level), removed, lives: s.lives, state: s.state === 'failed' ? 'failed' : removed.length === s.level.arrows.length ? 'won' : 'playing' };
+        session.remainingMs = s.remainingMs;
+        session.failureReason = s.failureReason;
     }
     return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, session };
 }
@@ -31,8 +34,10 @@ function validate(data) {
         return false;
     if (!['playing', 'won', 'failed'].includes(s.state))
         return false;
+    if (s.level.timeLimitMs != null && (!Number.isFinite(s.remainingMs) || s.remainingMs < 0 || s.remainingMs > s.level.timeLimitMs)) return false;
     if (s.state === 'failed')
-        return s.lives === 0;
+        return s.lives === 0 || s.failureReason === 'timeout' && s.level.timeLimitMs != null && s.remainingMs === 0;
+    if (s.level.timeLimitMs != null && s.remainingMs === 0) return false;
     if (s.lives === 0)
         return false;
     return (s.state === 'won') === (s.removed.length === ids.size);
@@ -53,7 +58,7 @@ function recoverOriginal(raw) {
         const envelope = JSON.parse(raw), data = JSON.parse(envelope.payload), level = data.session?.level;
         if (!validateLevel(level).valid || !solve(level).valid || !validProgress(level.number))
             return null;
-        return { version: 1, currentLevel: level.number, unlocked: level.number, settings: { sound: true, vibration: true }, tutorialDone: level.number > 1, lifeIntroDone: false, session: { level, removed: [], lives: level.lifeLimit, state: 'playing' } };
+        return { version: 1, currentLevel: level.number, unlocked: level.number, settings: { sound: true, vibration: true }, tutorialDone: level.number > 1, lifeIntroDone: false, session: { level, removed: [], lives: level.lifeLimit, remainingMs: level.timeLimitMs ?? null, state: 'playing' } };
     }
     catch {
         return null;
@@ -85,7 +90,13 @@ function restore(app, data) {
         app.session = new Session(state.level);
         app.session.removed = new Set(state.removed);
         app.session.lives = state.lives;
+        if (state.level.lifeLimit === null && lifeLimit(state.level.number) !== null) {
+            app.session.level.lifeLimit = lifeLimit(state.level.number);
+            app.session.lives = app.session.level.lifeLimit;
+        }
         app.session.state = state.state;
+        app.session.remainingMs = state.remainingMs ?? state.level.timeLimitMs ?? null;
+        app.session.failureReason = state.failureReason || (state.state === 'failed' ? 'lives' : null);
         app.tutorialStep = state.level.number === 1 && !app.tutorialDone ? 1 : 0;
     }
     app.screen = 'home';

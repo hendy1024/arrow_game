@@ -1,12 +1,19 @@
 'use strict';
-const { CONFIG, profileIndex, lifeLimit } = require('../config');
+const { CONFIG, profileIndex, lifeLimit, obstacleCount, timeLimit } = require('../config');
 const { DIRS, key, inside, exitCells, clone } = require('../domain/board');
 const { random, shuffle } = require('./random');
 const { solve } = require('./validate');
 const { fixtures } = require('../fixtures');
-function acceptable(metrics, profile) { return metrics.fill >= profile.minFill && metrics.fill <= profile.maxFill && metrics.depth >= profile.minDepth && metrics.openRatio <= profile.maxOpenRatio; }
+function acceptable(metrics, profile) { return metrics.fill >= profile.minFill && metrics.fill <= profile.maxFill && metrics.depth >= profile.minDepth && metrics.openRatio <= profile.maxOpenRatio && metrics.arrowCount >= (profile.minArrows || 0) && metrics.initialOpen <= (profile.maxInitialOpen ?? Infinity); }
 function* candidate(number, seed, profile, rng) {
     const level = { number, width: profile.size, height: profile.size, seed: seed >>> 0, generatorVersion: CONFIG.generatorVersion, profileVersion: CONFIG.profileVersion, lifeLimit: lifeLimit(number), arrows: [] };
+    level.timeLimitMs = timeLimit(number);
+    level.obstacles = [];
+    while (level.obstacles.length < obstacleCount(number)) {
+        const p = [1 + Math.floor(rng() * (profile.size - 2)), 1 + Math.floor(rng() * (profile.size - 2))];
+        if (!level.obstacles.some(q => key(q) === key(p))) level.obstacles.push(p);
+    }
+    if (profile.dense) return yield* require('./dense').denseCandidate(level, profile, rng);
     const occupied = new Set(), target = Math.ceil(profile.minFill * profile.size ** 2 + rng() * (profile.maxFill - profile.minFill) * profile.size ** 2);
     const maxCells = Math.floor(profile.maxFill * profile.size ** 2);
     for (let attempt = 0; attempt < 1500 && occupied.size < target; attempt++) {
@@ -56,6 +63,7 @@ function* generateSteps(number, seed, options = {}) {
     if (number === 1 && !options.forceRandom) {
         const l = clone(fixtures.tutorial);
         l.seed = seed >>> 0;
+        l.profileVersion = CONFIG.profileVersion;
         return { level: l, validation: solve(l), attempts: 0, fallback: false };
     }
     const profile = CONFIG.profiles[profileIndex(number)], rng = random(seed), maxAttempts = options.maxAttempts ?? 48;
@@ -68,12 +76,15 @@ function* generateSteps(number, seed, options = {}) {
     if (options.noFallback)
         throw new Error('Generation budget exhausted for ' + number + '/' + seed);
     const fallbacks = require('./fallbacks');
-    const level = clone(fallbacks[profileIndex(number)]);
+    const level = clone(obstacleCount(number) ? require('./obstacle-fallbacks')[profile.size + ':' + obstacleCount(number)] : fallbacks[profileIndex(number)]);
     if (!level)
         throw new Error('Missing verified fallback');
     level.number = number;
     level.seed = seed >>> 0;
     level.lifeLimit = lifeLimit(number);
+    level.timeLimitMs = timeLimit(number);
+    level.profileVersion = CONFIG.profileVersion;
+    level.generatorVersion = CONFIG.generatorVersion;
     const validation = solve(level);
     if (!validation.valid || !acceptable(validation.metrics, profile))
         throw new Error('Invalid fallback');

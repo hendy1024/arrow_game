@@ -2,6 +2,7 @@
 const { drawBoard } = require('../rendering/board');
 const { CONFIG, profileIndex } = require('../config');
 const { fixtures } = require('../fixtures');
+const { Viewport } = require('../input/viewport');
 const COLORS = { bg: '#f5f3eb', paper: '#fffef9', ink: '#263f36', muted: '#7b8579', line: '#dfe4d8', green: '#397356', mint: '#e5eddf', red: '#ae5949' };
 function rounded(ctx, x, y, w, h, r, fill, stroke) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); if (fill) {
     ctx.fillStyle = fill;
@@ -23,7 +24,7 @@ function wrap(ctx, value, maxWidth, size = 15) { ctx.font = `${size}px sans-seri
     lines.push(line); return lines; }
 function layout(info) { const width = info.width, height = info.height; const top = Math.max(info.safeTop || 0, info.menuBottom || 0) + 12, bottom = height - (info.safeBottom || 0) - 16; const boardSize = Math.max(120, Math.min(width - 32, bottom - top - 220)); return { width, height, top, bottom, board: { x: (width - boardSize) / 2 + 10, y: top + 142, width: boardSize - 20, height: boardSize - 20 }, card: { x: (width - boardSize) / 2, y: top + 132, width: boardSize, height: boardSize } }; }
 class View {
-    constructor(ctx) { this.ctx = ctx; this.buttons = []; this.transform = null; this.lastLayout = null; }
+    constructor(ctx) { this.ctx = ctx; this.buttons = []; this.transform = null; this.lastLayout = null; this.camera = new Viewport(); this.cameraLevel = null; }
     button(id, label, x, y, w, h = 48, primary = false) { const c = this.ctx; rounded(c, x, y, w, h, 14, primary ? COLORS.ink : COLORS.paper, primary ? null : COLORS.line); text(c, label, x + w / 2, y + h / 2, 15, primary ? COLORS.paper : COLORS.ink, 'center', 500); this.buttons.push({ id, label, x, y, width: w, height: h }); }
     render(app, info) {
         const c = this.ctx, l = layout(info);
@@ -57,7 +58,10 @@ class View {
         const by = Math.min(l.bottom - 123, Math.max(y + size + 36, l.top + usable * .73));
         text(c, '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关 · ' + CONFIG.profiles[profileIndex(app.currentLevel)].name, w / 2, by - 24, 13, COLORS.muted, 'center');
         this.button('start', app.session ? '继续游戏' : '开始游戏', 32, by, w - 64, 54, true);
-        this.button('settings', '声音与震动', w / 2 - 72, by + 68, 144, 44);
+        const secondaryWidth = (w - 76) / 2;
+        this.button('settings', '设置', 32, by + 68, secondaryWidth, 44);
+        if (!app.retryRead)
+            this.button('reset-progress-ask', '重置关卡进度', 44 + secondaryWidth, by + 68, secondaryWidth, 44);
         if (app.recoveryNotice && !app.savedError)
             text(c, app.recoveryNotice, w / 2, l.bottom + 3, 11, COLORS.red, 'center');
     }
@@ -69,6 +73,11 @@ class View {
         const s = app.session;
         text(c, '剩余箭头', 26, l.top + 80, 12, COLORS.muted);
         text(c, s ? s.remaining : '—', 26, l.top + 108, 27, COLORS.ink, 'left', 500);
+        if (s?.remainingMs != null) {
+            const seconds = Math.ceil(s.remainingMs / 1000);
+            text(c, '剩余时间', w / 2, l.top + 80, 12, COLORS.muted, 'center');
+            text(c, Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0'), w / 2, l.top + 108, 23, seconds <= 30 ? COLORS.red : COLORS.ink, 'center');
+        }
         if (s?.lives !== null && s) {
             text(c, '剩余机会', w - 26, l.top + 80, 12, COLORS.muted, 'right');
             text(c, '♥'.repeat(s.lives) + '♡'.repeat(s.level.lifeLimit - s.lives), w - 26, l.top + 108, 23, COLORS.green, 'right');
@@ -87,7 +96,11 @@ class View {
                 colors.set(f.blocker.id, COLORS.red);
                 offsets.set(id, Math.sin((f.until - s.time) / 16) * 2.5);
             }
-            this.transform = drawBoard(c, s.level, l.board, { removed: s.removed, paths: s.paths(), colors, offsets, grid: !!app.debugGrid });
+            if (this.cameraLevel !== s.level) { this.camera.reset(); this.cameraLevel = s.level; }
+            this.camera.update(l.board);
+            c.save(); c.beginPath(); c.rect(l.board.x, l.board.y, l.board.width, l.board.height); c.clip();
+            this.transform = drawBoard(c, s.level, this.camera.boardRect(), { removed: s.removed, paths: s.paths(), colors, offsets, grid: !!app.debugGrid });
+            c.restore();
             if (app.tutorialStep === 1) {
                 const a = s.level.arrows.find(a => a.id === 'first'), p = this.transform.toScreen(a.path[a.path.length - 1]);
                 c.strokeStyle = COLORS.green;
@@ -100,8 +113,11 @@ class View {
             rounded(c, 32, py, w - 64, 3, 1.5, COLORS.line);
             if (progress > 0)
                 rounded(c, 32, py, (w - 64) * progress, 3, 1.5, COLORS.green);
-            const message = app.message || (app.tutorialStep === 1 ? '点击圈中的箭头，沿方向移出棋盘' : '点击箭头，沿方向移出棋盘');
+            const message = app.message || (app.tutorialStep === 1 ? '点击圈中的箭头，沿方向移出棋盘' : this.camera.zoom > 1 ? '拖动查看棋盘，轻点箭头消除' : '箭头太小？点击放大后操作');
             wrap(c, message, w - 42, 13).forEach((v, i) => text(c, v, w / 2, py + 30 + i * 20, 13, app.message ? COLORS.green : COLORS.muted, 'center'));
+            if (s.level.number >= 3) {
+                this.button(this.camera.zoom < 3 ? 'zoom-in' : 'zoom-reset', this.camera.zoom === 1 ? '放大' : this.camera.zoom === 2 ? '再放大' : '全图', w - 84, l.top, 68, 44);
+            }
         }
         else {
             text(c, app.loadError ? '暂时没有准备好' : '正在铺好棋盘…', w / 2, l.card.y + l.card.height / 2 - 16, 16, COLORS.muted, 'center');
@@ -121,7 +137,7 @@ class View {
             case 'pause':
                 title = '歇一会儿';
                 description = '棋盘会在这里等你。';
-                actions = [['resume', '继续游戏', true], ['restart-ask', '重新开始'], ['settings', '声音与震动'], ['home', '返回首页']];
+                actions = [['resume', '继续游戏', true], ['restart-ask', '重新开始'], ['settings', '设置'], ['home', '返回首页']];
                 break;
             case 'restart':
                 title = '重新开始本关？';
@@ -135,18 +151,28 @@ class View {
                 break;
             case 'failed':
                 title = '再试一次';
-                description = '本次机会已用完。先观察出口，再慢慢解开。';
+                description = app.session?.failureReason === 'timeout' ? '时间到了。重新挑战会恢复完整时间和 3 次机会。' : '本次机会已用完。先观察出口，再慢慢解开。';
                 actions = [['restart', '重新挑战', true], ['home', '返回首页']];
                 break;
             case 'settings':
-                title = '声音与震动';
+                title = '设置';
                 description = '按你喜欢的方式，安静地解谜。';
-                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ['settings-done', '完成', true]];
+                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ...(!app.retryRead ? [['reset-progress-ask', '重置关卡进度']] : []), ['settings-done', '完成', true]];
+                break;
+            case 'reset-progress':
+                title = '重置关卡进度？';
+                description = '清除闯关进度，回到第 1 关。保留音效和震动设置。';
+                actions = [['reset-progress-cancel', '取消', true], ['reset-progress-confirm', '确认重置']];
                 break;
             case 'life-intro':
                 title = '多一点挑战';
-                description = '从本关开始，点击被挡住的箭头会消耗一次机会。机会用完后，可以重新挑战。';
+                description = '从第 3 关起，每关有 3 次机会。点错扣 1 次，第 3 次点错即失败；正确消除不扣次数。';
                 actions = [['life-accept', '知道了，开始', true]];
+                break;
+            case 'challenge-intro':
+                title = app.currentLevel === 15 ? '石块出现了' : '限时挑战';
+                description = app.currentLevel === 15 ? '灰色石块无法消除，会挡住路线。清空全部箭头即可通关。' : '本关限时 180 秒。时间归零或点错 3 次即失败；暂停和切后台时停止计时。';
+                actions = [['challenge-accept', '开始挑战', true]];
                 break;
         }
         const boxWidth = Math.min(w - 40, 340), lines = wrap(c, description, boxWidth - 48), boxHeight = 106 + lines.length * 23 + actions.length * 58 + 12, x = (w - boxWidth) / 2, y = Math.max(l.top, (l.height - boxHeight) / 2);
