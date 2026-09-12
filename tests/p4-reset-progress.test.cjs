@@ -33,7 +33,7 @@ test('P4 取消重置保留棋盘和关卡，确认重置清除主备进度并�
     a.action('pause'); a.action('settings');
     const view = new (require('../src/ui/view').View)(a.platform.ctx);
     view.render(a, a.platform.info());
-    assert.deepEqual(view.buttons.map(b => b.id), ['sound', 'vibration', 'settings-done']);
+    assert.deepEqual(view.buttons.map(b => b.id), ['music', 'sound', 'vibration', 'settings-done']);
     a.action('reset-progress-ask'); assert.equal(a.modal, 'settings');
     a.action('settings-done'); a.action('home');
     const previous = JSON.stringify(a.session.level);

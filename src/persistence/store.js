@@ -14,13 +14,14 @@ function snapshot(app) {
     if (app.session) {
         const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
         session = { level: clone(s.level), removed, lives: s.lives, state: s.state === 'failed' ? 'failed' : removed.length === s.level.arrows.length ? 'won' : 'playing' };
+        session.reviveDeclined = !!s.reviveDeclined;
         session.recordMs = s.recordMs; session.recordEligible = s.recordEligible && s.moves.size === 0;
         session.remainingMs = s.remainingMs;
         session.failureReason = s.failureReason;
         session.items = { ...s.items }; session.itemUses = { ...s.itemUses };
         session.restartLevel = clone(s.restartLevel);
     }
-    return { rewardClaims: [...app.rewardClaims], levelBests: { ...app.levelBests }, version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, inventory: { ...app.inventory }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
+    return { campaignRevision: 3, rewardClaims: [...app.rewardClaims], levelBests: { ...app.levelBests }, version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, inventory: { ...app.inventory }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
 }
 function validProgress(p) { return Number.isInteger(p) && p >= 1 && p < 1000000; }
 function validate(data) {
@@ -72,7 +73,7 @@ function recoverOriginal(raw) {
         const envelope = JSON.parse(raw), data = JSON.parse(envelope.payload), level = data.session?.level;
         if (!validateLevel(level).valid || !solve(level).valid || !validProgress(level.number))
             return null;
-        return { version: 1, currentLevel: level.number, unlocked: level.number, settings: { sound: true, vibration: true }, tutorialDone: level.number > 1, lifeIntroDone: false, session: { level, removed: [], lives: level.lifeLimit, remainingMs: level.timeLimitMs ?? null, state: 'playing' } };
+        return { campaignRevision: data.campaignRevision, version: 1, currentLevel: level.number, unlocked: level.number, settings: { sound: true, vibration: true }, tutorialDone: level.number > 1, lifeIntroDone: false, session: { level, removed: [], lives: level.lifeLimit, remainingMs: level.timeLimitMs ?? null, state: 'playing' } };
     }
     catch {
         return null;
@@ -98,7 +99,11 @@ function restore(app, data) {
         throw new Error('Invalid saved game');
     for (const key of ['currentLevel', 'unlocked', 'tutorialDone', 'lifeIntroDone'])
         app[key] = data[key];
-    app.settings = { ...data.settings };
+    if (data.campaignRevision !== 3) {
+        data = { ...data, campaignRevision: 3, currentLevel: 1, unlocked: 1, session: null, tutorialDone: false, lifeIntroDone: false, challengeUnlockSeen: false, raceUnlockSeen: false, rewardClaims: [], levelBests: {} };
+        app.currentLevel = app.unlocked = 1; app.tutorialDone = app.lifeIntroDone = false;
+    }
+    app.settings = { ...data.settings, music: typeof data.settings.music === 'boolean' ? data.settings.music : true };
     app.inventory = { ...(data.inventory || { time: 10, life: 10, shuffle: 10 }) };
     app.challengeUnlockSeen = !!data.challengeUnlockSeen;
     app.raceUnlockSeen = !!data.raceUnlockSeen;
@@ -110,6 +115,7 @@ function restore(app, data) {
         app.session = new Session(state.level);
         app.session.removed = new Set(state.removed);
         app.session.lives = state.lives;
+        app.session.reviveDeclined = !!state.reviveDeclined;
         app.session.recordMs = state.recordMs || 0; app.session.recordEligible = state.recordEligible === true;
         if (!state.level.campaignConfigured && state.level.lifeLimit === null && lifeLimit(state.level.number) !== null) {
             app.session.level.lifeLimit = lifeLimit(state.level.number);
@@ -143,6 +149,7 @@ function bindPersistence(app, storage) {
         const loaded = store.load();
         if (loaded.data)
             restore(app, loaded.data);
+        if (loaded.data && loaded.data.campaignRevision !== 3) app.persist();
         readBlocked = false;
         app.retryRead = null;
         app.savedError = false;

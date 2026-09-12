@@ -35,6 +35,6 @@ function draw(view, app, l, text, colors) {
 function detail(app) {
     const n = app.mapSelected, row = entry(n), best = app.levelBests[key(row.board)];
     const reward = rewardText(n) + (Object.keys(row.rewards).length ? (app.rewardClaims.includes(n) ? '（已领取）' : '（首次通关领取）') : '');
-    return { title: '第 ' + n + ' 关', description: row.board.width + '×' + row.board.height + ' · ' + row.board.arrows.length + '条箭头\n' + reward + '\n个人最快：' + (best ? require('../race/history').format(best) : '暂无纪录') + '\n' + (n > app.unlocked ? '通关前面的关卡后解锁' : '使用道具不计最快纪录。开始挑战将替换当前未完成棋盘。'), actions: [...(n <= app.unlocked ? [['map-play', n < app.unlocked ? '再次挑战' : '开始挑战', true]] : []), ['map-detail-close', '返回总览']] };
+    return { title: '第 ' + n + ' 关', description: row.board.width + '×' + row.board.height + ' · ' + row.board.arrows.length + '条箭头\n' + (row.board.obstacles || []).length + '个障碍 · ' + (row.board.timeLimitMs == null ? '不限时' : Math.round(row.board.timeLimitMs / 1000) + '秒') + '\n' + reward + '\n个人最快：' + (best ? require('../race/history').format(best) : '暂无纪录') + '\n' + (n > app.unlocked ? '通关前面的关卡后解锁' : '使用道具不计最快纪录。开始挑战将替换当前未完成棋盘。'), actions: [...(n <= app.unlocked ? [['map-play', n < app.unlocked ? '再次挑战' : '开始挑战', true]] : []), ['map-detail-close', '返回总览']] };
 }
 module.exports = { draw, detail };

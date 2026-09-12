@@ -26,6 +26,7 @@
     "won.png",
     "pause.png",
     "challenge.png",
+    "life-rescue.png",
     "failed.png",
     "small-challenge.png",
     "small-pause.png",
@@ -45,11 +46,11 @@
     "challenge-unlocked.png"
   ],
   "performance": {
-    "medianMs": 16.699999999999932,
-    "p95Ms": 16.799999999999955,
-    "averageMs": 16.665555555555557,
-    "heapBefore": 6761720,
-    "heapAfter": 7036220,
+    "medianMs": 16.700000000000045,
+    "p95Ms": 16.700000000000045,
+    "averageMs": 16.666666666666668,
+    "heapBefore": 3971104,
+    "heapAfter": 2961724,
     "iterations": 200
   },
   "video": "snake-and-parallel.webm"

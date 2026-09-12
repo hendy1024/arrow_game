@@ -1,6 +1,6 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path');
-const runtimeFiles = ['game.js', 'game.json', 'open-data/index.js', 'assets/blocked.wav', 'assets/removed.wav', 'assets/won.wav'];
+const runtimeFiles = ['game.js', 'game.json', 'open-data/index.js', 'assets/music.wav', 'assets/blocked.wav', 'assets/removed.wav', 'assets/won.wav'];
 function prepare(root) {
     const dir = path.join(root, 'dist/wechat');
     const source = JSON.parse(fs.readFileSync(path.join(root, 'project.config.json'), 'utf8'));

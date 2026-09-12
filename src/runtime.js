@@ -11,7 +11,7 @@ function mount(platform, options = {}) {
     function render() { view.ctx = platform.ctx; view.render(app, platform.info()); }
     function frame(now) { if (hidden)
         return; const delta = last === null ? 0 : Math.max(0, now - last); last = now; app.tick(delta); render(); frameId = platform.requestFrame(frame); }
-    platform.listen({ start: (id, x, y, count) => { pointer.start(id, x, y, count); if (count !== 1) { drag = null; return; } if (!app.modal && view.transform && view.camera.zoom > 1 && view.camera.contains(x, y)) drag = { id, x, y }; }, move: (id, x, y, count) => { pointer.move(id, x, y, count); if (count !== 1) { drag = null; return; } if (drag && drag.id === id && !app.modal && pointer.invalid) { view.camera.pan(x - drag.x, y - drag.y); drag.x = x; drag.y = y; render(); } }, end: (...args) => { const p = pointer.end(...args); drag = null; if (!p)
+    platform.listen({ start: (id, x, y, count) => { platform.setMusic?.(!hidden && app.settings.music !== false); pointer.start(id, x, y, count); if (count !== 1) { drag = null; return; } if (!app.modal && view.transform && view.camera.zoom > 1 && view.camera.contains(x, y)) drag = { id, x, y }; }, move: (id, x, y, count) => { pointer.move(id, x, y, count); if (count !== 1) { drag = null; return; } if (drag && drag.id === id && !app.modal && pointer.invalid) { view.camera.pan(x - drag.x, y - drag.y); drag.x = x; drag.y = y; render(); } }, end: (...args) => { const p = pointer.end(...args); drag = null; if (!p)
             return; const button = view.hitButton(...p); if (button) {
             if (button === 'zoom-in') view.camera.change(1);
             else if (button === 'zoom-out') view.camera.change(-1);
@@ -27,13 +27,14 @@ function mount(platform, options = {}) {
             const t = view.transform;
             if (!view.camera.contains(...p))
                 return;
-            app.clickArrow(hitArrow(app.session.level, t.toBoard(p), app.session.removed, app.session.paths()));
+            app.clickArrow(hitArrow(app.session.level, t.toBoard(p), app.session.removed, app.session.paths(), Math.max(.48, Math.min(.8, 8 / t.cell))));
             render();
-        } }, cancel: () => { pointer.cancel(); drag = null; }, hide: () => { if (app.mode === 'campaign' && app.session?.moves.size) app.session.recordEligible = false; hidden = true; pointer.cancel(); drag = null; platform.cancelFrame(frameId); last = null; if (app.session && app.mode !== 'race')
+        } }, cancel: () => { pointer.cancel(); drag = null; }, hide: () => { if (app.mode === 'campaign' && app.session?.moves.size) app.session.recordEligible = false; hidden = true; app.audioHidden = true; platform.setMusic?.(false); pointer.cancel(); drag = null; platform.cancelFrame(frameId); last = null; if (app.session && app.mode !== 'race')
             for (const id of [...app.session.moves.keys()])
                 app.session.complete(id); app.events(); app.session?.pause(); app.persist?.(); platform.stopFeedback?.(); }, show: () => { if (!hidden)
-            return; hidden = false; last = null; if (app.session?.state === 'paused' && !app.modal)
+            return; hidden = false; app.audioHidden = false; platform.setMusic?.(app.settings.music !== false); last = null; if (app.session?.state === 'paused' && !app.modal)
             app.session.resume(); frameId = platform.requestFrame(frame); }, resize: () => { pointer.cancel(); render(); } });
+    platform.setMusic?.(app.settings.music !== false);
     render();
     frameId = platform.requestFrame(frame);
     return { app, view, render, stop() { hidden = true; platform.cancelFrame(frameId); platform.destroy?.(); } };

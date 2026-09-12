@@ -4,7 +4,7 @@ const {prepare}=require('../scripts/upload-package.cjs');
 test('P0 独立上传工程只含运行文件，启用压缩且不上传源码映射',()=>{
  const root=path.resolve('.'),report=prepare(root),config=JSON.parse(fs.readFileSync('dist/wechat/project.config.json'));
  assert.equal(config.miniprogramRoot,'./');assert.equal(config.appid,'wx47e5456f2f4f5ade');assert.equal(config.setting.minified,true);assert.equal(config.setting.uploadWithSourceMap,false);
- assert.ok(report.runtimeBytes<4*1024*1024);assert.equal(report.files.length,6);assert.ok(report.files.includes('open-data/index.js'));assert.ok(!report.files.some(f=>f.includes('reports')||f.endsWith('.map')));
+ assert.ok(report.runtimeBytes<4*1024*1024);assert.equal(report.files.length,7);assert.ok(report.files.includes('open-data/index.js'));assert.ok(!report.files.some(f=>f.includes('reports')||f.endsWith('.map')));
  const outer=JSON.parse(fs.readFileSync('project.config.json'));assert.equal(outer.setting.minified,true);assert.equal(outer.setting.uploadWithSourceMap,false);
 });
 test('P0 上传检查拒绝混入开发文件及超过4MB，不静默删除文件',()=>{

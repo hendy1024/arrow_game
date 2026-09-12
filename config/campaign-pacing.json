@@ -1,0 +1,192 @@
+[
+  {
+    "from": 2,
+    "to": 2,
+    "size": 20,
+    "minDepth": 32,
+    "maxLength": 16,
+    "minAverageLength": 6,
+    "obstacles": 0,
+    "timeSeconds": 120
+  },
+  {
+    "from": 3,
+    "to": 3,
+    "size": 21,
+    "minDepth": 33,
+    "maxLength": 16,
+    "minAverageLength": 6.055555555555555,
+    "obstacles": 0,
+    "timeSeconds": 117
+  },
+  {
+    "from": 4,
+    "to": 4,
+    "size": 21,
+    "minDepth": 34,
+    "maxLength": 17,
+    "minAverageLength": 6.111111111111111,
+    "obstacles": 2,
+    "timeSeconds": 114
+  },
+  {
+    "from": 5,
+    "to": 5,
+    "size": 22,
+    "minDepth": 35,
+    "maxLength": 17,
+    "minAverageLength": 6.166666666666667,
+    "obstacles": 2,
+    "timeSeconds": 111
+  },
+  {
+    "from": 6,
+    "to": 6,
+    "size": 22,
+    "minDepth": 36,
+    "maxLength": 18,
+    "minAverageLength": 6.222222222222222,
+    "obstacles": 3,
+    "timeSeconds": 108
+  },
+  {
+    "from": 7,
+    "to": 7,
+    "size": 23,
+    "minDepth": 37,
+    "maxLength": 18,
+    "minAverageLength": 6.277777777777778,
+    "obstacles": 3,
+    "timeSeconds": 105
+  },
+  {
+    "from": 8,
+    "to": 8,
+    "size": 23,
+    "minDepth": 39,
+    "maxLength": 19,
+    "minAverageLength": 6.333333333333333,
+    "obstacles": 3,
+    "timeSeconds": 103
+  },
+  {
+    "from": 9,
+    "to": 9,
+    "size": 24,
+    "minDepth": 40,
+    "maxLength": 19,
+    "minAverageLength": 6.388888888888889,
+    "obstacles": 4,
+    "timeSeconds": 100
+  },
+  {
+    "from": 10,
+    "to": 10,
+    "size": 25,
+    "minDepth": 41,
+    "maxLength": 20,
+    "minAverageLength": 6.444444444444445,
+    "obstacles": 4,
+    "timeSeconds": 97
+  },
+  {
+    "from": 11,
+    "to": 11,
+    "size": 25,
+    "minDepth": 42,
+    "maxLength": 20,
+    "minAverageLength": 6.5,
+    "obstacles": 4,
+    "timeSeconds": 95
+  },
+  {
+    "from": 12,
+    "to": 12,
+    "size": 26,
+    "minDepth": 44,
+    "maxLength": 21,
+    "minAverageLength": 6.555555555555555,
+    "obstacles": 5,
+    "timeSeconds": 92
+  },
+  {
+    "from": 13,
+    "to": 13,
+    "size": 27,
+    "minDepth": 45,
+    "maxLength": 22,
+    "minAverageLength": 6.611111111111111,
+    "obstacles": 5,
+    "timeSeconds": 90
+  },
+  {
+    "from": 14,
+    "to": 14,
+    "size": 27,
+    "minDepth": 46,
+    "maxLength": 22,
+    "minAverageLength": 6.666666666666667,
+    "obstacles": 6,
+    "timeSeconds": 88
+  },
+  {
+    "from": 15,
+    "to": 15,
+    "size": 28,
+    "minDepth": 48,
+    "maxLength": 23,
+    "minAverageLength": 6.722222222222222,
+    "obstacles": 7,
+    "timeSeconds": 85
+  },
+  {
+    "from": 16,
+    "to": 16,
+    "size": 29,
+    "minDepth": 49,
+    "maxLength": 23,
+    "minAverageLength": 6.777777777777778,
+    "obstacles": 8,
+    "timeSeconds": 83
+  },
+  {
+    "from": 17,
+    "to": 17,
+    "size": 30,
+    "minDepth": 51,
+    "maxLength": 24,
+    "minAverageLength": 6.833333333333333,
+    "obstacles": 9,
+    "timeSeconds": 81
+  },
+  {
+    "from": 18,
+    "to": 18,
+    "size": 30,
+    "minDepth": 53,
+    "maxLength": 25,
+    "minAverageLength": 6.888888888888889,
+    "obstacles": 10,
+    "timeSeconds": 79
+  },
+  {
+    "from": 19,
+    "to": 19,
+    "size": 31,
+    "minDepth": 54,
+    "maxLength": 25,
+    "minAverageLength": 6.944444444444445,
+    "obstacles": 11,
+    "timeSeconds": 77
+  },
+  {
+    "from": 20,
+    "to": 20,
+    "size": 32,
+    "minDepth": 56,
+    "maxLength": 26,
+    "minAverageLength": 7,
+    "obstacles": 12,
+    "timeSeconds": 75
+  }
+]

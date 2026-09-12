@@ -182,6 +182,11 @@ class View {
                 description = '20×20满棋盘、4块障碍、3次容错。开始后计时，可放大拖动。返回首页结束本轮，普通闯关进度保留。';
                 actions = [['rush-accept', '开始挑战', true], ['home', '返回首页']];
                 break;
+            case 'life-rescue':
+                title = '容错次数用完了';
+                description = app.inventory.life > 0 ? '使用1个容错道具，增加1次机会，继续当前棋盘。剩余道具：' + app.inventory.life : '容错道具库存为0，本局无法续关。';
+                actions = [...(app.inventory.life > 0 ? [['life-rescue-use', '使用道具继续', true]] : []), ['life-rescue-decline', '结束本局']];
+                break;
             case 'failed':
                 title = '再试一次';
                 description = app.session?.failureReason === 'timeout' ? '时间到了。重新挑战会恢复完整时间和 3 次机会。' : '本次机会已用完。先观察出口，再慢慢解开。';
@@ -190,7 +195,7 @@ class View {
             case 'settings':
                 title = '设置';
                 description = '按你喜欢的方式，安静地解谜。';
-                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ['settings-done', '完成', true]];
+                actions = [['music', '背景音乐'], ['sound', '操作音效'], ['vibration', '震动'], ['settings-done', '完成', true]];
                 break;
             case 'reset-progress':
                 title = '重置关卡进度？';
@@ -199,12 +204,12 @@ class View {
                 break;
             case 'life-intro':
                 title = '多一点挑战';
-                description = '从第 3 关起，每关有 3 次机会。点错扣 1 次，第 3 次点错即失败；正确消除不扣次数。';
+                description = '本关有 ' + app.session.level.lifeLimit + ' 次容错。点错扣1次，降到0时可选择使用容错道具继续；正确消除不扣次数。';
                 actions = [['life-accept', '知道了，开始', true]];
                 break;
             case 'challenge-intro':
-                title = app.currentLevel === 15 ? '石块出现了' : '限时挑战';
-                description = app.currentLevel === 15 ? '灰色石块无法消除，会挡住路线。清空全部箭头即可通关。' : '本关限时 180 秒。时间归零或点错 3 次即失败；暂停和切后台时停止计时。';
+                title = ([4, 15].includes(app.currentLevel) && (app.session.level.obstacles || []).length) ? '石块出现了' : '限时挑战';
+                description = app.currentLevel === 15 ? '灰色石块无法消除，会挡住路线。清空全部箭头即可通关。' : '本关限时 ' + Math.round((app.session?.level.timeLimitMs || 0) / 1000) + ' 秒。时间归零或机会用完即失败；暂停和切后台时停止计时。';
                 actions = [['challenge-accept', '开始挑战', true]];
                 break;
         }
@@ -218,7 +223,18 @@ class View {
         text(c, title, w / 2, y + 40, 24, COLORS.ink, 'center', 500);
         lines.forEach((line, i) => text(c, line, w / 2, y + 82 + i * 23, 14, COLORS.muted, 'center'));
         if (app.modal === 'race-friends' && app.platform.drawFriends) app.platform.drawFriends(c, { x: x + 24, y: y + 70, width: boxWidth - 48, height: 180 });
-        actions.forEach(([id, label, primary], i) => this.button(id, label, x + 20, y + 102 + lines.length * 23 + i * 58, boxWidth - 40, 48, primary));
+        actions.forEach(([id, label, primary], i) => {
+            const bx = x + 20, by = y + 102 + lines.length * 23 + i * 58, bw = boxWidth - 40;
+            if (app.modal === 'settings' && ['music', 'sound', 'vibration'].includes(id)) {
+                const on = app.settings[id] !== false;
+                rounded(c, bx, by, bw, 48, 14, COLORS.paper, COLORS.line);
+                text(c, label, bx + 14, by + 24, 16, COLORS.ink);
+                text(c, on ? '开' : '关', bx + bw - 76, by + 24, 13, COLORS.muted, 'center');
+                rounded(c, bx + bw - 62, by + 10, 48, 28, 14, on ? COLORS.green : COLORS.line);
+                c.beginPath(); c.arc(bx + bw - (on ? 28 : 48), by + 24, 10, 0, Math.PI * 2); c.fillStyle = COLORS.paper; c.fill();
+                this.buttons.push({ id, label, x: bx, y: by, width: bw, height: 48 });
+            } else this.button(id, label, bx, by, bw, 48, primary);
+        });
     }
     itemBar(app, y, width) {
         const c = this.ctx, size = (width - 80) / 3;

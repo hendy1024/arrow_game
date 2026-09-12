@@ -73,7 +73,7 @@ function drawBoard(ctx, level, rect, options = {}) {
             continue;
         const path = options.paths?.get(a.id) || a.path;
         const offset = options.offsets?.get(a.id) || 0;
-        drawArrow(ctx, path.map(p => { const s = t.toScreen(p); return [s[0] + offset, s[1]]; }), a.direction, options.colors?.get(a.id), Math.max(2.4, t.cell * .11), t.cell);
+        drawArrow(ctx, path.map(p => { const s = t.toScreen(p); return [s[0] + offset, s[1]]; }), a.direction, options.colors?.get(a.id), Math.max(t.cell < 13 ? 1.8 : 2.4, t.cell * .11), t.cell);
     }
     ctx.restore();
     return t;

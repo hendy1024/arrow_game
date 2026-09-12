@@ -12,7 +12,7 @@ class Controller {
         this.session = null;
         this.currentLevel = 1;
         this.unlocked = 1;
-        this.settings = { sound: true, vibration: true };
+        this.settings = { music: true, sound: true, vibration: true };
         this.inventory = { time: 10, life: 10, shuffle: 10 };
         this.tutorialDone = false;
         this.lifeIntroDone = false;
@@ -32,7 +32,7 @@ class Controller {
         this.raceUnlockSeen = false;
         this.rewardClaims = []; this.levelBests = {}; this.rewardNotice = "";
     }
-    changed() { this.dirty = true; this.onChange(); }
+    changed() { this.dirty = true; this.platform.setMusic?.(!this.audioHidden && this.settings.music !== false); this.onChange(); }
     say(message, duration = CONFIG.messageMs) { this.message = message; this.messageUntil = this.clock + duration; this.dirty = true; }
     async start(number = this.currentLevel) {
         if (this.loading)
@@ -82,13 +82,14 @@ class Controller {
         }
         else
             this.modal = null;
-        if (!this.modal && [15, 20].includes(this.session.level.number)) {
+        if (!this.modal && (this.session.level.campaignConfigured ? ((this.session.level.timeLimitMs != null && this.session.level.number === 2) || ((this.session.level.obstacles || []).length && this.session.level.number === 4)) : [15, 20].includes(this.session.level.number))) {
             this.session.pause(); this.modal = 'challenge-intro';
         }
     }
     syncModal() {
         if (this.mode === 'race') { require('../race/controller').sync(this); return; }
         if (this.mode === 'campaign' && this.unlocked >= 20 && !this.challengeUnlockSeen) { this.session.pause(); this.modal = 'rush-unlocked'; return; }
+        if (require('./life-rescue').eligible(this)) { this.modal = 'life-rescue'; return; }
         if (this.session.state === 'won')
             this.modal = 'won';
         else if (this.session.state === 'failed' && (!this.session.moves.size || this.session.failureReason === 'timeout'))
@@ -147,7 +148,7 @@ class Controller {
     }
     tick(ms) {
         require('../race/controller').refreshFriends(this);
-        if (this.screen === 'game' && this.session && !this.loading) {
+        if (this.screen === 'game' && this.session && !this.loading && this.modal !== 'life-rescue') {
             if (this.mode === 'campaign' && this.session.state === 'playing') this.session.recordMs += require('../campaign/catalog').activeMs(this.session, ms);
             this.session.tick(ms);
             this.events();
@@ -163,6 +164,7 @@ class Controller {
     action(name) {
         if (name === 'dismiss-modal' && this.modal) return require('./dismiss').dismiss(this);
         if (require('../campaign/controller').action(this, name)) return;
+        if (require('./life-rescue').action(this, name)) return;
         const raceAction = require('../race/controller').action(this, name);
         if (raceAction.handled) return raceAction.result;
         if (name === 'rush-notice-close' && ['rush-locked', 'rush-unlocked'].includes(this.modal)) {
@@ -228,6 +230,8 @@ class Controller {
         }
         else if (name === 'settings-done' && this.modal === 'settings')
             this.modal = this.settingsReturn || null;
+        else if (name === 'music' && this.modal === 'settings')
+            this.settings.music = !this.settings.music;
         else if (name === 'sound' && this.modal === 'settings') {
             this.settings.sound = !this.settings.sound;
             if (!this.settings.sound)

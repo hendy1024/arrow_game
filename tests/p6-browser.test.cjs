@@ -16,37 +16,53 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
     async function mouse(x, y) { await c.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, s); await c.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, s); }
     async function button(id) { const p = await evaluate(`(()=>{const b=__arrowDebug.view.buttons.find(b=>b.id===${JSON.stringify(id)});if(!b)throw Error('Missing button');const r=document.querySelector('canvas').getBoundingClientRect();return [r.x+b.x+b.width/2,r.y+b.y+b.height/2];})()`); await mouse(...p); }
     async function arrow(id) { const p = await evaluate(`(()=>{const g=__arrowDebug,a=g.app.session.level.arrows.find(a=>a.id===${JSON.stringify(id)}),p=g.view.transform.toScreen(a.path.at(-1)),r=document.querySelector('canvas').getBoundingClientRect();return [r.x+p[0],r.y+p[1]];})()`); await mouse(...p); }
+    async function atFrame(fn) {
+        await evaluate('window.testTick=__arrowDebug.app.tick; __arrowDebug.app.tick=function(){}');
+        try { await fn(); } finally { await evaluate('__arrowDebug.app.tick=window.testTick; delete window.testTick'); }
+    }
     try {
         await c.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, s);
         await c.send('Page.navigate', { url: b.url + '/?debug' }, s);
         await until('!!window.__arrowDebug');
         await t.test('首页实际渲染，开始按钮接收真实指针事件', async () => { assert.equal(await evaluate('__arrowDebug.app.screen'), 'home'); await capture('home'); await button('start'); await until('__arrowDebug.app.session && !__arrowDebug.app.loading'); assert.equal(await evaluate('__arrowDebug.app.tutorialStep'), 1); await capture('tutorial'); report.checks.push('home-start'); });
         await t.test('折线实际跟随动画并通关，计数在尾部出界后变化', async () => {
-            await arrow('first');
-            assert.equal(await evaluate('__arrowDebug.app.session.remaining'), 3);
+            await atFrame(async () => {
+                await arrow('first');
+                assert.equal(await evaluate('__arrowDebug.app.session.remaining'), 3);
+                assert.equal(await evaluate('__arrowDebug.app.session.moves.has("first")'), true);
+            });
             await until('__arrowDebug.app.session.removed.has("first")');
-            await arrow('second');
-            await delay(70);
-            assert.equal(await evaluate('__arrowDebug.app.session.moves.has("second")'), true);
-            await capture('snake-moving');
+            await atFrame(async () => {
+                await arrow('second');
+                await evaluate('window.testTick.call(__arrowDebug.app,70); __arrowDebug.render()');
+                assert.equal(await evaluate('__arrowDebug.app.session.moves.has("second")'), true);
+                assert.equal(await evaluate('__arrowDebug.app.session.remaining'), 2);
+                await capture('snake-moving');
+            });
             await until('__arrowDebug.app.session.removed.has("second")');
             await arrow('third');
             await until('__arrowDebug.app.modal==="won"');
             await capture('won');
             await button('next');
             await until('__arrowDebug.app.currentLevel===2 && !__arrowDebug.app.loading');
+            assert.equal(await evaluate('__arrowDebug.app.modal'),'life-intro');
+            assert.equal(await evaluate('__arrowDebug.app.session.level.width'),20);
+            assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'),120000);
+            await button('life-accept');
             report.checks.push('snake-and-win');
         });
         await t.test('暂停、设置、重新开始确认按真实点击完成', async () => { await button('pause'); assert.equal(await evaluate('__arrowDebug.app.session.state'), 'paused'); await capture('pause'); await button('settings'); await button('sound'); assert.equal(await evaluate('__arrowDebug.app.settings.sound'), false); await button('settings-done'); await button('restart-ask'); await button('restart-cancel'); assert.equal(await evaluate('__arrowDebug.app.session.state'), 'playing'); report.checks.push('modal-flow'); });
         await t.test('挑战关真实点击扣生命、失败、相同布局重试', async () => {
             await evaluate('__arrowDebug.level(3,51)');
-            await button('life-accept');
+            assert.equal(await evaluate('__arrowDebug.app.modal'),null);
             await capture('challenge');
             const before = await evaluate('JSON.stringify(__arrowDebug.app.session.level.arrows)'), id = await evaluate('__arrowDebug.app.session.level.arrows.find(a=>__arrowDebug.app.session.classify(a.id).type==="blocked").id');
             for (let i = 0; i < 3; i++) {
                 await arrow(id);
                 await delay(230);
             }
+            await until('__arrowDebug.app.modal==="life-rescue"');
+            await capture('life-rescue'); await button('life-rescue-decline');
             await until('__arrowDebug.app.modal==="failed"');
             await capture('failed');
             await button('restart');
@@ -116,9 +132,16 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
                 demoRecorder.start();`);
             await delay(200);
             assert.equal(await evaluate('__arrowDebug.app.currentLevel'), 1);
-            await arrow('first');
-            await arrow('third');
-            assert.equal(await evaluate('__arrowDebug.app.session.moves.size'), 2);
+            // CDP round trips can outlast a short arrow on a busy host. Hold
+            // simulation time during input setup, then record both real moves.
+            await evaluate('window.demoTick=__arrowDebug.app.tick; __arrowDebug.app.tick=function(){}');
+            try {
+                await arrow('first');
+                await arrow('third');
+                assert.equal(await evaluate('__arrowDebug.app.session.moves.size'), 2);
+            } finally {
+                await evaluate('__arrowDebug.app.tick=window.demoTick; delete window.demoTick');
+            }
             await delay(200);
             await arrow('second');
             await until('__arrowDebug.app.session.state==="won"');
@@ -137,7 +160,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             await capture('level-3-hard');
             await button('pause'); await button('settings');
             await capture('settings-reset');
-            assert.deepEqual(await evaluate('__arrowDebug.view.buttons.map(b=>b.id)'), ['sound', 'vibration', 'settings-done']);
+            assert.deepEqual(await evaluate('__arrowDebug.view.buttons.map(b=>b.id)'), ['music', 'sound', 'vibration', 'settings-done']);
             assert.equal(await evaluate('__arrowDebug.app.currentLevel'), 3);
             await button('settings-done'); await button('home');
             await capture('home-reset');
