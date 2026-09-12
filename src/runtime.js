@@ -19,6 +19,10 @@ function mount(platform, options = {}) {
             else app.action(button);
             render();
             return;
+        } if (app.modal && view.dialogRect) {
+            const r = view.dialogRect;
+            if (p[0] < r.x || p[0] > r.x + r.width || p[1] < r.y || p[1] > r.y + r.height) { app.action('dismiss-modal'); render(); }
+            return;
         } if (view.transform && !app.modal) {
             const t = view.transform;
             if (!view.camera.contains(...p))

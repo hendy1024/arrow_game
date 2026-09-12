@@ -96,11 +96,13 @@ function generate(number, seed, options) { const task = generateSteps(number, se
 function generateAsync(number, seed, { schedule = fn => setTimeout(fn, 0), ...options } = {}) {
     const task = generateSteps(number, seed, options);
     return new Promise((resolve, reject) => { function step() { try {
-        const result = task.next();
-        if (result.done)
-            resolve(result.value);
-        else
-            schedule(step);
+        const started = Date.now();
+        for (let work = 0; work < 12; work++) {
+            const result = task.next();
+            if (result.done) { resolve(result.value); return; }
+            if (Date.now() - started >= 8) break;
+        }
+        schedule(step);
     }
     catch (e) {
         reject(e);

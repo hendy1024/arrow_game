@@ -9,38 +9,41 @@ function checksum(value) { let n = 2166136261; for (let i = 0; i < value.length;
     n = Math.imul(n, 16777619);
 } return (n >>> 0).toString(16); }
 function snapshot(app) {
-    if (app.mode !== 'campaign' && app.campaignSnapshot) return { ...clone(app.campaignSnapshot), settings: { ...app.settings } };
+    if (app.mode !== 'campaign' && app.campaignSnapshot) return { ...clone(app.campaignSnapshot), settings: { ...app.settings }, inventory: { ...app.inventory } };
     let session = null;
     if (app.session) {
         const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
         session = { level: clone(s.level), removed, lives: s.lives, state: s.state === 'failed' ? 'failed' : removed.length === s.level.arrows.length ? 'won' : 'playing' };
         session.remainingMs = s.remainingMs;
         session.failureReason = s.failureReason;
-        session.items = { ...s.items };
+        session.items = { ...s.items }; session.itemUses = { ...s.itemUses };
         session.restartLevel = clone(s.restartLevel);
     }
-    return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
+    return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, inventory: { ...app.inventory }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
 }
 function validProgress(p) { return Number.isInteger(p) && p >= 1 && p < 1000000; }
 function validate(data) {
     if (!data || data.version !== 1 || !validProgress(data.currentLevel) || !validProgress(data.unlocked) || typeof data.tutorialDone !== 'boolean' || typeof data.lifeIntroDone !== 'boolean' || typeof data.settings?.sound !== 'boolean' || typeof data.settings?.vibration !== 'boolean')
         return false;
+    if (data.inventory && !['time', 'life', 'shuffle'].every(k => Number.isInteger(data.inventory[k]) && data.inventory[k] >= 0 && data.inventory[k] <= 10)) return false;
     if (data.session === null)
         return true;
     const s = data.session;
     const items = s?.items || { time: 1, life: 1, shuffle: 1 };
     if (!['time', 'life', 'shuffle'].every(k => items[k] === 0 || items[k] === 1)) return false;
+    const uses = s?.itemUses || Object.fromEntries(Object.entries(items).map(([k,v]) => [k, 1-v]));
+    if (!['time', 'life', 'shuffle'].every(k => Number.isInteger(uses[k]) && uses[k] >= 0 && uses[k] <= 11)) return false;
     if (s?.restartLevel && (!validateLevel(s.restartLevel).valid || !solve(s.restartLevel).valid || s.restartLevel.number !== data.currentLevel)) return false;
     if (!s || !validateLevel(s.level).valid || !solve(s.level).valid || !validProgress(s.level.number) || s.level.number !== data.currentLevel || !Array.isArray(s.removed) || new Set(s.removed).size !== s.removed.length)
         return false;
     const ids = new Set(s.level.arrows.map(a => a.id));
     if (s.removed.some(id => !ids.has(id)))
         return false;
-    if (s.level.lifeLimit === null ? s.lives !== null : !Number.isInteger(s.lives) || s.lives < 0 || s.lives > s.level.lifeLimit + 1 - items.life)
+    if (s.level.lifeLimit === null ? s.lives !== null : !Number.isInteger(s.lives) || s.lives < 0 || s.lives > s.level.lifeLimit + uses.life)
         return false;
     if (!['playing', 'won', 'failed'].includes(s.state))
         return false;
-    if (s.level.timeLimitMs != null && (!Number.isFinite(s.remainingMs) || s.remainingMs < 0 || s.remainingMs > s.level.timeLimitMs + (1 - items.time) * 30000)) return false;
+    if (s.level.timeLimitMs != null && (!Number.isFinite(s.remainingMs) || s.remainingMs < 0 || s.remainingMs > s.level.timeLimitMs + uses.time * 30000)) return false;
     if (s.state === 'failed')
         return s.lives === 0 || s.failureReason === 'timeout' && s.level.timeLimitMs != null && s.remainingMs === 0;
     if (s.level.timeLimitMs != null && s.remainingMs === 0) return false;
@@ -91,6 +94,7 @@ function restore(app, data) {
     for (const key of ['currentLevel', 'unlocked', 'tutorialDone', 'lifeIntroDone'])
         app[key] = data[key];
     app.settings = { ...data.settings };
+    app.inventory = { ...(data.inventory || { time: 10, life: 10, shuffle: 10 }) };
     app.challengeUnlockSeen = !!data.challengeUnlockSeen;
     app.raceUnlockSeen = !!data.raceUnlockSeen;
     app.session = null;
@@ -107,6 +111,7 @@ function restore(app, data) {
         app.session.remainingMs = state.remainingMs ?? state.level.timeLimitMs ?? null;
         app.session.failureReason = state.failureReason || (state.state === 'failed' ? 'lives' : null);
         app.session.items = { ...(state.items || { time: 1, life: 1, shuffle: 1 }) };
+        app.session.itemUses = { ...(state.itemUses || Object.fromEntries(Object.entries(app.session.items).map(([k,v]) => [k, 1-v]))) };
         app.session.restartLevel = state.restartLevel ? clone(state.restartLevel) : null;
         app.tutorialStep = state.level.number === 1 && !app.tutorialDone ? 1 : 0;
     }

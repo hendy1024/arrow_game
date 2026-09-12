@@ -12,6 +12,7 @@ class Controller {
         this.currentLevel = 1;
         this.unlocked = 1;
         this.settings = { sound: true, vibration: true };
+        this.inventory = { time: 10, life: 10, shuffle: 10 };
         this.tutorialDone = false;
         this.lifeIntroDone = false;
         this.tutorialStep = 0;
@@ -131,7 +132,7 @@ class Controller {
                 if (this.mode === 'campaign') {
                     const previous = this.unlocked;
                     this.unlocked = Math.max(this.unlocked, this.session.level.number + 1);
-                    if (previous < 15 && this.unlocked >= 15 && !this.raceUnlockSeen) this.modal = 'race-unlocked';
+                    if (previous < 6 && this.unlocked >= 6 && !this.raceUnlockSeen) this.modal = 'race-unlocked';
                 }
                 this.platform.feedback('won', this.settings);
             }
@@ -156,11 +157,12 @@ class Controller {
         }
     }
     action(name) {
+        if (name === 'dismiss-modal' && this.modal) return require('./dismiss').dismiss(this);
         const raceAction = require('../race/controller').action(this, name);
         if (raceAction.handled) return raceAction.result;
         if (name === 'rush-notice-close' && ['rush-locked', 'rush-unlocked'].includes(this.modal)) {
             if (this.modal === 'rush-unlocked') this.challengeUnlockSeen = true;
-            this.modal = null; if (this.screen === 'game' && this.session) this.syncModal(); this.changed(); return;
+            this.modal = null; if (this.screen === 'game' && this.session) { this.session.resume(); this.syncModal(); } this.changed(); return;
         }
         if (name === 'challenge' && this.screen === 'home' && !this.modal && this.unlocked < 20) { this.modal = 'rush-locked'; this.changed(); return; }
         if (name === 'challenge' && this.screen === 'home' && !this.modal && !this.loading && !this.retryRead) {
@@ -173,21 +175,25 @@ class Controller {
             this.itemsReturn = this.modal; this.session.pause(); this.modal = 'items'; this.changed(); return;
         }
         if (name === 'items-done' && this.modal === 'items') { this.modal = this.itemsReturn || null; if (!this.modal) this.session.resume(); this.changed(); return; }
-        if (name.startsWith('item-') && this.modal === 'items') {
+        if (name.startsWith('item-') && !this.loading && this.session && (this.modal === 'items' || !this.modal && this.screen === 'game' && this.session.state === 'playing')) {
             const kind = name.slice(5), s = this.session;
-            if (!s.items[kind]) return;
-            if (kind === 'time' && s.remainingMs !== null) { s.remainingMs += 30000; s.items.time--; }
-            else if (kind === 'life' && s.lives !== null) { s.lives++; s.items.life--; }
+            if (!Object.hasOwn(this.inventory, kind)) return;
+            if (s.moves.size) { this.say('请等箭头移出后再使用道具'); return; }
+            if (!this.inventory[kind]) { this.emptyReturn = this.modal; s.pause(); this.modal = 'item-empty'; this.changed(); return; }
+            if (kind === 'time' && s.remainingMs !== null) { s.remainingMs += 30000; this.consumeItem('time'); }
+            else if (kind === 'life' && s.lives !== null) { s.lives++; this.consumeItem('life'); }
             else if (kind === 'shuffle') return this.shuffle();
+            else this.say(kind === 'time' ? '本关不限时，无需加时' : '本关不限次数，无需补充');
             this.changed(); return;
         }
+        if (name === 'item-empty-close' && this.modal === 'item-empty') { this.modal = this.emptyReturn || null; if (!this.modal) this.session.resume(); this.changed(); return; }
         if (name === 'rush-accept' && this.modal === 'rush-ready') {
             this.modal = null; this.session.resume(); this.changed(); return;
         }
         if (name === 'home' && this.mode === 'challenge' && (this.modal || this.loadError)) {
-            const settings = { ...this.settings };
+            const settings = { ...this.settings }, inventory = { ...this.inventory };
             require('../persistence/store').restore(this, this.campaignSnapshot);
-            this.settings = settings; this.mode = 'campaign'; this.campaignSnapshot = null;
+            this.settings = settings; this.inventory = inventory; this.mode = 'campaign'; this.campaignSnapshot = null;
             this.loading = this.loadError = false; this.message = ''; this.changed(); return;
         }
         if (name === 'retry-save') {
@@ -279,19 +285,21 @@ class Controller {
         }
         this.changed();
     }
+    consumeItem(kind) { this.inventory[kind]--; this.session.items[kind] = 0; this.session.itemUses[kind]++; }
     async shuffle() {
         const old = this.session, token = ++this.token;
-        this.modal = 'shuffling'; this.changed();
+        const returnModal = this.modal; this.shuffleReturn = returnModal;
+        old.pause(); this.modal = 'shuffling'; this.changed();
         try {
             const level = await require('../generation/reshuffle').reshuffle(old, this.generate, this.platform.seed());
             if (token !== this.token || this.session !== old) return;
             const next = new Session(level);
             next.restartLevel = old.restartLevel || old.level;
             next.lives = old.lives; next.remainingMs = old.remainingMs;
-            next.items = { ...old.items, shuffle: old.items.shuffle - 1 };
-            next.pause(); this.session = next;
+            next.items = { ...old.items }; next.itemUses = { ...old.itemUses };
+            next.pause(); this.session = next; this.consumeItem('shuffle');
         } catch { this.say('重排未完成，道具已保留'); }
-        if (token === this.token) { this.modal = 'items'; this.changed(); }
+        if (token === this.token) { this.modal = returnModal; if (!this.modal) this.session.resume(); this.changed(); }
     }
 }
 module.exports = { Controller };

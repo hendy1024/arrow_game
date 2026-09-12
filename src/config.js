@@ -1,7 +1,7 @@
 'use strict';
 const CONFIG = Object.freeze({
     title: '箭间', version: 1, generatorVersion: 4, profileVersion: 8,
-    speed: 12, feedbackMs: 200, messageMs: 1200, dragTolerance: 10,
+    speed: 24, distanceSpeed: 2, feedbackMs: 200, messageMs: 1200, dragTolerance: 10,
     lifeStart: 3, lives: 3, campaignLength: 30,
     profiles: [
         { name: '初见', size: 6, minFill: .35, maxFill: .50, maxLength: 6, maxTurns: 2, minDepth: 1, maxOpenRatio: 1 },

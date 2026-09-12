@@ -110,6 +110,10 @@ function mount(platform, options = {}) {
             else app.action(button);
             render();
             return;
+        } if (app.modal && view.dialogRect) {
+            const r = view.dialogRect;
+            if (p[0] < r.x || p[0] > r.x + r.width || p[1] < r.y || p[1] > r.y + r.height) { app.action('dismiss-modal'); render(); }
+            return;
         } if (view.transform && !app.modal) {
             const t = view.transform;
             if (!view.camera.contains(...p))
@@ -143,6 +147,7 @@ class Controller {
         this.currentLevel = 1;
         this.unlocked = 1;
         this.settings = { sound: true, vibration: true };
+        this.inventory = { time: 10, life: 10, shuffle: 10 };
         this.tutorialDone = false;
         this.lifeIntroDone = false;
         this.tutorialStep = 0;
@@ -262,7 +267,7 @@ class Controller {
                 if (this.mode === 'campaign') {
                     const previous = this.unlocked;
                     this.unlocked = Math.max(this.unlocked, this.session.level.number + 1);
-                    if (previous < 15 && this.unlocked >= 15 && !this.raceUnlockSeen) this.modal = 'race-unlocked';
+                    if (previous < 6 && this.unlocked >= 6 && !this.raceUnlockSeen) this.modal = 'race-unlocked';
                 }
                 this.platform.feedback('won', this.settings);
             }
@@ -287,11 +292,12 @@ class Controller {
         }
     }
     action(name) {
+        if (name === 'dismiss-modal' && this.modal) return require("src/ui/dismiss.js").dismiss(this);
         const raceAction = require("src/race/controller.js").action(this, name);
         if (raceAction.handled) return raceAction.result;
         if (name === 'rush-notice-close' && ['rush-locked', 'rush-unlocked'].includes(this.modal)) {
             if (this.modal === 'rush-unlocked') this.challengeUnlockSeen = true;
-            this.modal = null; if (this.screen === 'game' && this.session) this.syncModal(); this.changed(); return;
+            this.modal = null; if (this.screen === 'game' && this.session) { this.session.resume(); this.syncModal(); } this.changed(); return;
         }
         if (name === 'challenge' && this.screen === 'home' && !this.modal && this.unlocked < 20) { this.modal = 'rush-locked'; this.changed(); return; }
         if (name === 'challenge' && this.screen === 'home' && !this.modal && !this.loading && !this.retryRead) {
@@ -304,21 +310,25 @@ class Controller {
             this.itemsReturn = this.modal; this.session.pause(); this.modal = 'items'; this.changed(); return;
         }
         if (name === 'items-done' && this.modal === 'items') { this.modal = this.itemsReturn || null; if (!this.modal) this.session.resume(); this.changed(); return; }
-        if (name.startsWith('item-') && this.modal === 'items') {
+        if (name.startsWith('item-') && !this.loading && this.session && (this.modal === 'items' || !this.modal && this.screen === 'game' && this.session.state === 'playing')) {
             const kind = name.slice(5), s = this.session;
-            if (!s.items[kind]) return;
-            if (kind === 'time' && s.remainingMs !== null) { s.remainingMs += 30000; s.items.time--; }
-            else if (kind === 'life' && s.lives !== null) { s.lives++; s.items.life--; }
+            if (!Object.hasOwn(this.inventory, kind)) return;
+            if (s.moves.size) { this.say('请等箭头移出后再使用道具'); return; }
+            if (!this.inventory[kind]) { this.emptyReturn = this.modal; s.pause(); this.modal = 'item-empty'; this.changed(); return; }
+            if (kind === 'time' && s.remainingMs !== null) { s.remainingMs += 30000; this.consumeItem('time'); }
+            else if (kind === 'life' && s.lives !== null) { s.lives++; this.consumeItem('life'); }
             else if (kind === 'shuffle') return this.shuffle();
+            else this.say(kind === 'time' ? '本关不限时，无需加时' : '本关不限次数，无需补充');
             this.changed(); return;
         }
+        if (name === 'item-empty-close' && this.modal === 'item-empty') { this.modal = this.emptyReturn || null; if (!this.modal) this.session.resume(); this.changed(); return; }
         if (name === 'rush-accept' && this.modal === 'rush-ready') {
             this.modal = null; this.session.resume(); this.changed(); return;
         }
         if (name === 'home' && this.mode === 'challenge' && (this.modal || this.loadError)) {
-            const settings = { ...this.settings };
+            const settings = { ...this.settings }, inventory = { ...this.inventory };
             require("src/persistence/store.js").restore(this, this.campaignSnapshot);
-            this.settings = settings; this.mode = 'campaign'; this.campaignSnapshot = null;
+            this.settings = settings; this.inventory = inventory; this.mode = 'campaign'; this.campaignSnapshot = null;
             this.loading = this.loadError = false; this.message = ''; this.changed(); return;
         }
         if (name === 'retry-save') {
@@ -410,19 +420,21 @@ class Controller {
         }
         this.changed();
     }
+    consumeItem(kind) { this.inventory[kind]--; this.session.items[kind] = 0; this.session.itemUses[kind]++; }
     async shuffle() {
         const old = this.session, token = ++this.token;
-        this.modal = 'shuffling'; this.changed();
+        const returnModal = this.modal; this.shuffleReturn = returnModal;
+        old.pause(); this.modal = 'shuffling'; this.changed();
         try {
             const level = await require("src/generation/reshuffle.js").reshuffle(old, this.generate, this.platform.seed());
             if (token !== this.token || this.session !== old) return;
             const next = new Session(level);
             next.restartLevel = old.restartLevel || old.level;
             next.lives = old.lives; next.remainingMs = old.remainingMs;
-            next.items = { ...old.items, shuffle: old.items.shuffle - 1 };
-            next.pause(); this.session = next;
+            next.items = { ...old.items }; next.itemUses = { ...old.itemUses };
+            next.pause(); this.session = next; this.consumeItem('shuffle');
         } catch { this.say('重排未完成，道具已保留'); }
-        if (token === this.token) { this.modal = 'items'; this.changed(); }
+        if (token === this.token) { this.modal = returnModal; if (!this.modal) this.session.resume(); this.changed(); }
     }
 }
 module.exports = { Controller };
@@ -442,6 +454,7 @@ class Session {
         this.level = clone(level);
         this.restartLevel = null;
         this.items = { time: 1, life: 1, shuffle: 1 };
+        this.itemUses = { time: 0, life: 0, shuffle: 0 };
         this.removed = new Set();
         this.moves = new Map();
         this.feedback = new Map();
@@ -499,7 +512,8 @@ class Session {
             }
         }
         else if (result.type === 'allowed') {
-            this.moves.set(id, { id, distance: 0, elapsedMs: 0 });
+            const speed = CONFIG.speed + exitCells(result.arrow, this.level).length * CONFIG.distanceSpeed;
+            this.moves.set(id, { id, distance: 0, elapsedMs: 0, speed });
             this.emit('move-start', { id });
         }
         return result;
@@ -523,7 +537,7 @@ class Session {
             throw new Error('Invalid elapsed time');
         if (this.state === 'playing' && this.remainingMs !== null) {
             if (this.moves.size === this.remaining && this.remaining > 0) {
-                const finish = Math.max(...[...this.moves].map(([id, move]) => Math.max(0, completionDistance(this.level.arrows.find(a => a.id === id), this.level) * 1000 / CONFIG.speed - move.elapsedMs)));
+                const finish = Math.max(...[...this.moves].map(([id, move]) => Math.max(0, completionDistance(this.level.arrows.find(a => a.id === id), this.level) * 1000 / move.speed - move.elapsedMs)));
                 if (finish < this.remainingMs && finish <= ms) ms = finish;
             }
             const elapsed = Math.min(ms, this.remainingMs);
@@ -538,8 +552,8 @@ class Session {
         for (const [id, move] of this.moves) {
             const arrow = this.level.arrows.find(a => a.id === id);
             move.elapsedMs += ms;
-            move.distance = move.elapsedMs * CONFIG.speed / 1000;
-            if (move.distance >= completionDistance(arrow, this.level))
+            move.distance = move.elapsedMs * move.speed / 1000;
+            if (move.distance + 1e-9 >= completionDistance(arrow, this.level))
                 this.complete(id);
         }
     }
@@ -687,7 +701,7 @@ module.exports = { pointAt, bodyAt, completionDistance, segmentDistance, occupie
 'use strict';
 const CONFIG = Object.freeze({
     title: '箭间', version: 1, generatorVersion: 4, profileVersion: 8,
-    speed: 12, feedbackMs: 200, messageMs: 1200, dragTolerance: 10,
+    speed: 24, distanceSpeed: 2, feedbackMs: 200, messageMs: 1200, dragTolerance: 10,
     lifeStart: 3, lives: 3, campaignLength: 30,
     profiles: [
         { name: '初见', size: 6, minFill: .35, maxFill: .50, maxLength: 6, maxTurns: 2, minDepth: 1, maxOpenRatio: 1 },
@@ -809,11 +823,13 @@ function generate(number, seed, options) { const task = generateSteps(number, se
 function generateAsync(number, seed, { schedule = fn => setTimeout(fn, 0), ...options } = {}) {
     const task = generateSteps(number, seed, options);
     return new Promise((resolve, reject) => { function step() { try {
-        const result = task.next();
-        if (result.done)
-            resolve(result.value);
-        else
-            schedule(step);
+        const started = Date.now();
+        for (let work = 0; work < 12; work++) {
+            const result = task.next();
+            if (result.done) { resolve(result.value); return; }
+            if (Date.now() - started >= 8) break;
+        }
+        schedule(step);
     }
     catch (e) {
         reject(e);
@@ -8554,7 +8570,7 @@ async function prepare(app) {
     } catch { if (token === app.token) { app.loading = false; app.modal = 'race-error'; app.changed(); } }
 }
 function startRound(app) {
-    app.session = new Session(app.race.course[app.race.index]); app.currentLevel = app.race.index + 1;
+    app.session = new Session({ ...app.race.course[app.race.index], lifeLimit: null }); app.currentLevel = app.race.index + 1;
     app.tutorialStep = 0; app.screen = 'game'; app.modal = null; app.changed();
 }
 function sync(app) {
@@ -8578,16 +8594,25 @@ function persistResult(app) {
     }
 }
 function refreshFriends(app) {
-    if (app.modal !== 'race-friends' || !app.platform.showFriends) return;
+    if (!(app.modal === 'race-friends' || app.modal === 'rank' && app.rankTab === 'friends') || !app.platform.showFriends) return;
     const key = period(app.raceKind || 'daily', now(app)).key;
     if (app.friendPeriod !== key) { app.friendPeriod = key; app.platform.showFriends(key); }
 }
 function action(app, name) {
     const handled = result => ({ handled: true, result });
-    if (name === 'race-sync' && app.modal === 'race-history') {
+    if (name === 'rank' && app.screen === 'home' && !app.modal) { app.rankTab = 'friends'; app.modal = 'rank'; app.raceKind = app.raceKind || 'daily'; app.friendPeriod = null; refreshFriends(app); app.changed(); return handled(); }
+    if (name === 'rank-authorize' && app.modal === 'rank' && app.rankTab === 'friends') { app.platform.authorizeFriends?.(); return handled(); }
+    if (name === 'rank-refresh' && app.modal === 'rank' && app.rankTab === 'friends') { app.friendPeriod = null; refreshFriends(app); app.changed(); return handled(); }
+    if (name === 'rank-close' && app.modal === 'rank') { app.platform.closeFriends?.(); app.modal = null; app.changed(); return handled(); }
+    if (app.modal === 'rank' && ['rank-friends', 'rank-personal', 'rank-daily', 'rank-weekly'].includes(name)) {
+        if (name === 'rank-friends' || name === 'rank-personal') { app.rankTab = name.slice(5); app.platform.closeFriends?.(); app.friendPeriod = null; }
+        else app.raceKind = name.slice(5);
+        app.historyPage = 0; app.historyNotice = ''; refreshFriends(app); app.changed(); return handled();
+    }
+    if (name === 'race-sync' && (app.modal === 'race-history' || app.modal === 'rank' && app.rankTab === 'personal')) {
         const run = async () => {
             try {
-                const records = history.read(app.platform.storage).filter(r => r.period === period(app.raceKind || 'daily', now(app)).key).sort((a, b) => a.elapsed - b.elapsed);
+                const records = history.read(app.platform.storage).filter(r => r.version === VERSION && r.period === period(app.raceKind || 'daily', now(app)).key).sort((a, b) => a.elapsed - b.elapsed);
                 if (!records.length) { app.historyNotice = '本期暂无成绩'; return; }
                 if (!app.platform.publishRace) { app.historyNotice = '请在微信中同步'; return; }
                 await app.platform.publishRace(records[0]); app.historyNotice = '本期最佳已同步';
@@ -8598,16 +8623,17 @@ function action(app, name) {
     }
     if (name === 'race-notice-close' && app.modal === 'race-unlocked') { app.raceUnlockSeen = true; app.modal = null; if (app.screen === 'game') { app.session.resume(); app.syncModal(); } app.changed(); return handled(); }
     if (name === 'race' && app.screen === 'home' && !app.modal && !app.retryRead) {
-        app.modal = app.unlocked >= 15 ? 'race-menu' : 'race-locked'; app.raceKind = app.raceKind || 'daily'; app.changed(); return handled();
+        app.modal = app.unlocked >= 6 ? 'race-menu' : 'race-locked'; app.raceKind = app.raceKind || 'daily'; app.changed(); return handled();
     }
     if (name === 'race-close' && app.modal?.startsWith('race-') && app.mode !== 'race') { app.platform.closeFriends?.(); app.modal = null; app.changed(); return handled(); }
     if (name === 'race-period' && ['race-menu', 'race-history', 'race-friends'].includes(app.modal)) { app.raceKind = app.raceKind === 'daily' ? 'weekly' : 'daily'; app.historyPage = 0; if (app.modal === 'race-friends') refreshFriends(app); app.changed(); return handled(); }
     if (name === 'race-back' && ['race-history', 'race-friends'].includes(app.modal)) { app.platform.closeFriends?.(); app.modal = 'race-menu'; app.changed(); return handled(); }
     if (name === 'race-history' && app.modal === 'race-menu') { app.historyPage = 0; app.historyNotice = ''; app.modal = 'race-history'; app.changed(); return handled(); }
-    if (name === 'race-page' && app.modal === 'race-history') { app.historyPage = (app.historyPage || 0) + 1; app.changed(); return handled(); }
-    if (name === 'race-friend-page' && app.modal === 'race-friends') { app.platform.nextFriends?.(); return handled(); }
+    if (name === 'race-page' && (app.modal === 'race-history' || app.modal === 'rank')) { app.historyPage = (app.historyPage || 0) + 1; app.changed(); return handled(); }
+    if (name === 'race-friend-page' && (app.modal === 'race-friends' || app.modal === 'rank')) { app.platform.nextFriends?.(); return handled(); }
     if (name === 'race-friends' && app.modal === 'race-menu') { app.modal = 'race-friends'; app.friendPeriod = null; refreshFriends(app); app.changed(); return handled(); }
-    if (name === 'race-start' && app.modal === 'race-menu' && app.unlocked >= 15) {
+    if (['race-start', 'race-daily', 'race-weekly'].includes(name) && app.modal === 'race-menu' && app.unlocked >= 6) {
+        if (name !== 'race-start') app.raceKind = name.slice(5);
         app.campaignSnapshot = require("src/persistence/store.js").snapshot(app); app.mode = 'race'; app.session = null; return handled(prepare(app));
     }
     if (app.mode !== 'race') return { handled: false };
@@ -8620,8 +8646,8 @@ function action(app, name) {
     if (name === 'race-retry-save' && app.modal === 'race-finished') { persistResult(app); app.changed(); return handled(); }
     if ((name === 'restart' && ['restart', 'failed'].includes(app.modal)) || name === 'race-retry' && ['race-error', 'race-finished'].includes(app.modal)) return handled(prepare(app));
     if (name === 'home' && app.modal) {
-        app.token++; const settings = app.settings; require("src/persistence/store.js").restore(app, app.campaignSnapshot);
-        app.settings = settings; app.mode = 'campaign'; app.campaignSnapshot = null; app.loading = app.loadError = false; app.message = ''; app.changed(); return handled();
+        app.token++; const settings = app.settings, inventory = app.inventory; require("src/persistence/store.js").restore(app, app.campaignSnapshot);
+        app.settings = settings; app.inventory = inventory; app.mode = 'campaign'; app.campaignSnapshot = null; app.loading = app.loadError = false; app.message = ''; app.changed(); return handled();
     }
     return { handled: false };
 }
@@ -8630,7 +8656,7 @@ module.exports = { action, sync, elapsed, refreshFriends };
 },
 "src/race/rules.js":function(module,exports,require){
 'use strict';
-const VERSION = 1;
+const VERSION = 2;
 const ROUNDS = 10;
 const OFFSET = 8 * 60 * 60 * 1000;
 function period(kind, now = Date.now()) {
@@ -8651,7 +8677,7 @@ function difficulty(round) {
     if (!Number.isInteger(round) || round < 1 || round > ROUNDS) throw Error('Invalid race round');
     const progress = (round - 1) / (ROUNDS - 1);
     const size = Math.round(10 * Math.pow(2, progress));
-    return { round, size, factor: Math.pow(8, progress), minDepth: Math.round(2 * Math.pow(8, progress)), lifeLimit: 3, timeLimitMs: null };
+    return { round, size, factor: Math.pow(8, progress), minDepth: Math.round(2 * Math.pow(8, progress)), lifeLimit: null, timeLimitMs: null };
 }
 module.exports = { VERSION, ROUNDS, period, seedFor, difficulty };
 
@@ -8691,12 +8717,12 @@ function* courseRoundSteps(periodKey, round, options = {}) {
     const p = profile(round), seed = seedFor(periodKey, round), rng = random(seed);
     for (let attempt = 0; attempt < (options.maxAttempts ?? 64); attempt++) {
         const level = yield* candidate(3, seed, p, rng);
-        level.number = round; level.lifeLimit = 3; level.timeLimitMs = null; level.raceVersion = VERSION;
+        level.number = round; level.lifeLimit = null; level.timeLimitMs = null; level.raceVersion = VERSION;
         const validation = solve(level);
         if (validation.valid && acceptable(validation.metrics, p)) return level;
     }
     const result = JSON.parse(JSON.stringify(require("src/race/fallbacks.js")[round - 1]));
-    result.seed = seed; result.raceVersion = VERSION;
+    result.lifeLimit = null; result.seed = seed; result.raceVersion = VERSION;
     if (!solve(result).valid) throw Error('Invalid race fallback');
     return result;
 }
@@ -8730,38 +8756,41 @@ function checksum(value) { let n = 2166136261; for (let i = 0; i < value.length;
     n = Math.imul(n, 16777619);
 } return (n >>> 0).toString(16); }
 function snapshot(app) {
-    if (app.mode !== 'campaign' && app.campaignSnapshot) return { ...clone(app.campaignSnapshot), settings: { ...app.settings } };
+    if (app.mode !== 'campaign' && app.campaignSnapshot) return { ...clone(app.campaignSnapshot), settings: { ...app.settings }, inventory: { ...app.inventory } };
     let session = null;
     if (app.session) {
         const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
         session = { level: clone(s.level), removed, lives: s.lives, state: s.state === 'failed' ? 'failed' : removed.length === s.level.arrows.length ? 'won' : 'playing' };
         session.remainingMs = s.remainingMs;
         session.failureReason = s.failureReason;
-        session.items = { ...s.items };
+        session.items = { ...s.items }; session.itemUses = { ...s.itemUses };
         session.restartLevel = clone(s.restartLevel);
     }
-    return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
+    return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, inventory: { ...app.inventory }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
 }
 function validProgress(p) { return Number.isInteger(p) && p >= 1 && p < 1000000; }
 function validate(data) {
     if (!data || data.version !== 1 || !validProgress(data.currentLevel) || !validProgress(data.unlocked) || typeof data.tutorialDone !== 'boolean' || typeof data.lifeIntroDone !== 'boolean' || typeof data.settings?.sound !== 'boolean' || typeof data.settings?.vibration !== 'boolean')
         return false;
+    if (data.inventory && !['time', 'life', 'shuffle'].every(k => Number.isInteger(data.inventory[k]) && data.inventory[k] >= 0 && data.inventory[k] <= 10)) return false;
     if (data.session === null)
         return true;
     const s = data.session;
     const items = s?.items || { time: 1, life: 1, shuffle: 1 };
     if (!['time', 'life', 'shuffle'].every(k => items[k] === 0 || items[k] === 1)) return false;
+    const uses = s?.itemUses || Object.fromEntries(Object.entries(items).map(([k,v]) => [k, 1-v]));
+    if (!['time', 'life', 'shuffle'].every(k => Number.isInteger(uses[k]) && uses[k] >= 0 && uses[k] <= 11)) return false;
     if (s?.restartLevel && (!validateLevel(s.restartLevel).valid || !solve(s.restartLevel).valid || s.restartLevel.number !== data.currentLevel)) return false;
     if (!s || !validateLevel(s.level).valid || !solve(s.level).valid || !validProgress(s.level.number) || s.level.number !== data.currentLevel || !Array.isArray(s.removed) || new Set(s.removed).size !== s.removed.length)
         return false;
     const ids = new Set(s.level.arrows.map(a => a.id));
     if (s.removed.some(id => !ids.has(id)))
         return false;
-    if (s.level.lifeLimit === null ? s.lives !== null : !Number.isInteger(s.lives) || s.lives < 0 || s.lives > s.level.lifeLimit + 1 - items.life)
+    if (s.level.lifeLimit === null ? s.lives !== null : !Number.isInteger(s.lives) || s.lives < 0 || s.lives > s.level.lifeLimit + uses.life)
         return false;
     if (!['playing', 'won', 'failed'].includes(s.state))
         return false;
-    if (s.level.timeLimitMs != null && (!Number.isFinite(s.remainingMs) || s.remainingMs < 0 || s.remainingMs > s.level.timeLimitMs + (1 - items.time) * 30000)) return false;
+    if (s.level.timeLimitMs != null && (!Number.isFinite(s.remainingMs) || s.remainingMs < 0 || s.remainingMs > s.level.timeLimitMs + uses.time * 30000)) return false;
     if (s.state === 'failed')
         return s.lives === 0 || s.failureReason === 'timeout' && s.level.timeLimitMs != null && s.remainingMs === 0;
     if (s.level.timeLimitMs != null && s.remainingMs === 0) return false;
@@ -8812,6 +8841,7 @@ function restore(app, data) {
     for (const key of ['currentLevel', 'unlocked', 'tutorialDone', 'lifeIntroDone'])
         app[key] = data[key];
     app.settings = { ...data.settings };
+    app.inventory = { ...(data.inventory || { time: 10, life: 10, shuffle: 10 }) };
     app.challengeUnlockSeen = !!data.challengeUnlockSeen;
     app.raceUnlockSeen = !!data.raceUnlockSeen;
     app.session = null;
@@ -8828,6 +8858,7 @@ function restore(app, data) {
         app.session.remainingMs = state.remainingMs ?? state.level.timeLimitMs ?? null;
         app.session.failureReason = state.failureReason || (state.state === 'failed' ? 'lives' : null);
         app.session.items = { ...(state.items || { time: 1, life: 1, shuffle: 1 }) };
+        app.session.itemUses = { ...(state.itemUses || Object.fromEntries(Object.entries(app.session.items).map(([k,v]) => [k, 1-v]))) };
         app.session.restartLevel = state.restartLevel ? clone(state.restartLevel) : null;
         app.tutorialStep = state.level.number === 1 && !app.tutorialDone ? 1 : 0;
     }
@@ -8870,6 +8901,25 @@ function bindPersistence(app, storage) {
     return store;
 }
 module.exports = { KEY, BACKUP, checksum, encode, decode, validate, snapshot, restore, createStore, bindPersistence };
+
+},
+"src/ui/dismiss.js":function(module,exports,require){
+'use strict';
+function dismiss(app) {
+    const targets = {
+        pause: 'resume', settings: 'settings-done', restart: 'restart-cancel', 'reset-progress': 'reset-progress-cancel',
+        'life-intro': 'life-accept', 'challenge-intro': 'challenge-accept', 'rush-ready': 'home',
+        'rush-locked': 'rush-notice-close', 'rush-unlocked': 'rush-notice-close', 'race-unlocked': 'race-notice-close',
+        'race-locked': 'race-close', 'race-menu': 'race-close', 'race-history': 'race-close', 'race-friends': 'race-close',
+        'race-ready': 'home', 'race-loading': 'home', 'race-error': 'home', 'race-finished': 'home',
+        won: 'home', failed: 'home', items: 'items-done', 'item-empty': 'item-empty-close', rank: 'rank-close'
+    };
+    if (app.modal === 'shuffling') {
+        app.token++; app.modal = app.shuffleReturn || null; if (!app.modal) app.session.resume(); app.changed(); return;
+    }
+    if (targets[app.modal]) return app.action(targets[app.modal]);
+}
+module.exports = { dismiss };
 
 },
 "src/generation/reshuffle.js":function(module,exports,require){
@@ -8927,7 +8977,7 @@ function wrap(ctx, value, maxWidth, size = 15) { ctx.font = `${size}px sans-seri
         line += ch;
 } if (line)
     lines.push(line); return lines; }
-function layout(info) { const width = info.width, height = info.height; const top = Math.max(info.safeTop || 0, info.menuBottom || 0) + 12, bottom = height - (info.safeBottom || 0) - 16; const boardSize = Math.max(120, Math.min(width - 32, bottom - top - 220)); return { width, height, top, bottom, board: { x: (width - boardSize) / 2 + 10, y: top + 142, width: boardSize - 20, height: boardSize - 20 }, card: { x: (width - boardSize) / 2, y: top + 132, width: boardSize, height: boardSize } }; }
+function layout(info) { const width = info.width, height = info.height; const top = Math.max(info.safeTop || 0, info.menuBottom || 0) + 12, bottom = height - (info.safeBottom || 0) - 16; const boardSize = Math.max(120, Math.min(width - 32, bottom - top - 290)); return { width, height, top, bottom, board: { x: (width - boardSize) / 2 + 10, y: top + 142, width: boardSize - 20, height: boardSize - 20 }, card: { x: (width - boardSize) / 2, y: top + 132, width: boardSize, height: boardSize } }; }
 class View {
     constructor(ctx) { this.ctx = ctx; this.buttons = []; this.transform = null; this.lastLayout = null; this.camera = new Viewport(); this.cameraLevel = null; }
     button(id, label, x, y, w, h = 48, primary = false) { const c = this.ctx; rounded(c, x, y, w, h, 14, primary ? COLORS.ink : COLORS.paper, primary ? null : COLORS.line); text(c, label, x + w / 2, y + h / 2, 15, primary ? COLORS.paper : COLORS.ink, 'center', 500); this.buttons.push({ id, label, x, y, width: w, height: h }); }
@@ -8935,7 +8985,7 @@ class View {
         const c = this.ctx, l = layout(info);
         this.lastLayout = l;
         this.buttons = [];
-        this.transform = null;
+        this.transform = null; this.dialogRect = null;
         c.fillStyle = COLORS.bg;
         c.fillRect(0, 0, l.width, l.height);
         if (app.screen === 'home')
@@ -8953,7 +9003,8 @@ class View {
     }
     home(app, l) {
         const c = this.ctx, w = l.width, usable = l.bottom - l.top;
-        text(c, 'ARROW GARDEN', w / 2, l.top + 22, 11, COLORS.muted, 'center', 500);
+        this.button('rank', '排行榜', w - 96, l.top, 80, 44);
+        text(c, 'ARROW GARDEN', 82, l.top + 22, 11, COLORS.muted, 'center', 500);
         const titleY = l.top + usable * .12;
         text(c, CONFIG.title, w / 2, titleY, 52, COLORS.ink, 'center', 500);
         text(c, '让每条箭头，找到出口', w / 2, titleY + 43, 14, COLORS.muted, 'center');
@@ -8968,7 +9019,7 @@ class View {
         this.button('settings', '设置', 32, by + 126, secondaryWidth, 44);
         if (!app.retryRead)
             this.button('reset-progress-ask', '重置关卡进度', 44 + secondaryWidth, by + 126, secondaryWidth, 44);
-        if (!app.retryRead) this.button('race', app.unlocked >= 15 ? '竞速 · 每日 / 每周' : '竞速 · 15关解锁', 32, by + 66, w - 64, 48);
+        if (!app.retryRead) this.button('race', app.unlocked >= 6 ? '竞速 · 每日 / 每周' : '竞速 · 通关5关解锁', 32, by + 66, w - 64, 48);
         if (app.recoveryNotice && !app.savedError)
             text(c, app.recoveryNotice, w / 2, l.bottom + 3, 11, COLORS.red, 'center');
     }
@@ -8978,7 +9029,7 @@ class View {
         text(c, app.mode === 'race' ? '竞速模式' : app.mode === 'challenge' ? '挑战模式' : '箭间', w / 2, l.top + 15, 17, COLORS.ink, 'center', 500);
         text(c, app.mode === 'race' ? '第 ' + app.currentLevel + ' / 10 关' : app.mode === 'challenge' ? '20×20 · 4块障碍' : '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
         const s = app.session;
-        if (app.mode !== 'race' && s && s.level.number >= 3 && !app.loading) this.button('items', '道具', 68, l.top, 52, 44);
+
         text(c, '剩余箭头', 26, l.top + 80, 12, COLORS.muted);
         text(c, s ? s.remaining : '—', 26, l.top + 108, 27, COLORS.ink, 'left', 500);
         if (app.mode === 'race' && app.race?.startedAt !== undefined) {
@@ -8992,9 +9043,9 @@ class View {
         }
         if (s?.lives !== null && s) {
             text(c, '剩余机会', w - 26, l.top + 80, 12, COLORS.muted, 'right');
-            text(c, '♥'.repeat(s.lives) + '♡'.repeat(Math.max(0, s.level.lifeLimit + 1 - s.items.life - s.lives)), w - 26, l.top + 108, 23, COLORS.green, 'right');
+            text(c, s.lives > 5 ? '♥ × ' + s.lives : '♥'.repeat(s.lives) + '♡'.repeat(Math.max(0, s.level.lifeLimit - s.lives)), w - 26, l.top + 108, 23, COLORS.green, 'right');
         }
-        else {
+        else if (app.mode !== 'race') {
             rounded(c, w - 108, l.top + 88, 82, 29, 14, COLORS.mint);
             text(c, '自由尝试', w - 67, l.top + 103, 12, COLORS.green, 'center');
         }
@@ -9028,6 +9079,7 @@ class View {
                 rounded(c, 32, py, (w - 64) * progress, 3, 1.5, COLORS.green);
             const message = app.message || (app.tutorialStep === 1 ? '点击圈中的箭头，沿方向移出棋盘' : this.camera.zoom > 1 ? '拖动查看棋盘，轻点箭头消除' : '箭头太小？点击放大后操作');
             wrap(c, message, w - 42, 13).forEach((v, i) => text(c, v, w / 2, py + 30 + i * 20, 13, app.message ? COLORS.green : COLORS.muted, 'center'));
+            if (app.mode !== 'race') this.itemBar(app, py + 64, w);
             if (s.level.number >= 3) {
                 this.button(this.camera.zoom < 3 ? 'zoom-in' : 'zoom-reset', this.camera.zoom === 1 ? '放大' : this.camera.zoom === 2 ? '再放大' : '全图', w - 84, l.top, 68, 44);
             }
@@ -9045,6 +9097,7 @@ class View {
         this.buttons = [];
         c.fillStyle = 'rgba(30,48,40,.32)';
         c.fillRect(0, 0, w, l.height);
+        if (app.modal === 'rank') { require("src/race/rank-view.js").render(this, app, l); return; }
         let title = '', description = '', actions = [];
         switch (app.modal) {
             case 'rush-locked':
@@ -9053,10 +9106,12 @@ class View {
             case 'rush-unlocked':
                 title = '挑战模式已解锁'; description = '已到达第20关！主页可进入90秒高难度挑战，普通闯关进度独立保留。';
                 actions = [['rush-notice-close', '知道了', true]]; break;
+            case 'item-empty':
+                title = '道具已用完'; description = '当前道具数量为0，暂时无法使用。'; actions = [['item-empty-close', '知道了', true]]; break;
             case 'items': {
                 const s = app.session;
-                title = '道具'; description = '每局各1次，查看道具时暂停计时。';
-                actions = [['item-time', s.remainingMs === null ? '加时 · 本关不限时' : '加时30秒 · ' + s.items.time], ['item-life', s.lives === null ? '容错 · 本关不限次' : '容错+1 · ' + s.items.life], ['item-shuffle', '重排剩余箭头 · ' + s.items.shuffle], ['items-done', '返回游戏', true]];
+                title = '道具'; description = '道具数量跨关卡保存，查看时暂停计时。';
+                actions = [['item-time', s.remainingMs === null ? '加时 · 本关不限时' : '加时30秒 · ' + app.inventory.time], ['item-life', s.lives === null ? '容错 · 本关不限次' : '容错+1 · ' + app.inventory.life], ['item-shuffle', '重排剩余箭头 · ' + app.inventory.shuffle], ['items-done', '返回游戏', true]];
                 break;
             }
             case 'shuffling':
@@ -9110,11 +9165,28 @@ class View {
         const raceDialog = require("src/race/view.js").dialog(app);
         if (raceDialog) ({ title, description, actions } = raceDialog);
         const boxWidth = Math.min(w - 40, 340), lines = wrap(c, description, boxWidth - 48), boxHeight = 106 + lines.length * 23 + actions.length * 58 + 12, x = (w - boxWidth) / 2, y = Math.max(l.top, (l.height - boxHeight) / 2);
+        this.dialogRect = { x, y, width: boxWidth, height: boxHeight };
         rounded(c, x, y, boxWidth, boxHeight, 24, COLORS.paper);
         text(c, title, w / 2, y + 40, 24, COLORS.ink, 'center', 500);
         lines.forEach((line, i) => text(c, line, w / 2, y + 82 + i * 23, 14, COLORS.muted, 'center'));
         if (app.modal === 'race-friends' && app.platform.drawFriends) app.platform.drawFriends(c, { x: x + 24, y: y + 70, width: boxWidth - 48, height: 180 });
         actions.forEach(([id, label, primary], i) => this.button(id, label, x + 20, y + 102 + lines.length * 23 + i * 58, boxWidth - 40, 48, primary));
+    }
+    itemBar(app, y, width) {
+        const c = this.ctx, size = (width - 80) / 3;
+        for (const [i, kind, label] of [[0, 'time', '加时'], [1, 'life', '容错'], [2, 'shuffle', '重排']]) {
+            const x = 28 + i * (size + 12), cx = x + size / 2, cy = y + 19;
+            rounded(c, x, y, size, 60, 14, COLORS.paper, COLORS.line);
+            c.strokeStyle = COLORS.green; c.lineWidth = 2.3; c.beginPath();
+            if (kind === 'time') { c.arc(cx, cy, 10, 0, Math.PI * 2); c.moveTo(cx, cy - 6); c.lineTo(cx, cy); c.lineTo(cx + 5, cy + 2); }
+            else if (kind === 'shuffle') { c.moveTo(cx - 11, cy - 5); c.lineTo(cx + 10, cy - 5); c.lineTo(cx + 5, cy - 10); c.moveTo(cx + 10, cy + 5); c.lineTo(cx - 11, cy + 5); c.lineTo(cx - 6, cy + 10); }
+            c.stroke();
+            if (kind === 'life') text(c, '♥', cx, cy, 26, COLORS.red, 'center');
+            text(c, label, cx - 5, y + 45, 13, COLORS.ink, 'center');
+            rounded(c, x + size - 24, y + 39, 24, 21, 9, COLORS.ink);
+            text(c, app.inventory[kind], x + size - 12, y + 49, 12, COLORS.paper, 'center');
+            this.buttons.push({ id: 'item-' + kind, x, y, width: size, height: 60, label });
+        }
     }
     hitButton(x, y) { return this.buttons.find(b => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height)?.id || null; }
 }
@@ -9221,6 +9293,52 @@ class Viewport {
 module.exports = { Viewport };
 
 },
+"src/race/rank-view.js":function(module,exports,require){
+'use strict';
+const { read, format } = require("src/race/history.js");
+function render(view, app, l) {
+    const { text, rounded, COLORS } = require("src/ui/view.js");
+    const c = view.ctx, width = l.width - 24, height = l.bottom - l.top - 12;
+    const x = 12, y = l.top + 6, half = (width - 52) / 2;
+    view.dialogRect = { x, y, width, height };
+    rounded(c, x, y, width, height, 24, COLORS.paper);
+    text(c, '排行榜', l.width / 2, y + 30, 24, COLORS.ink, 'center', 500);
+    view.button('rank-close', '×', x + width - 52, y + 8, 44, 44);
+    view.button('rank-friends', '好友榜', x + 20, y + 56, half, 44, app.rankTab === 'friends');
+    view.button('rank-personal', '个人榜', x + 32 + half, y + 56, half, 44, app.rankTab === 'personal');
+    for (const [i, kind, label] of [[0, 'daily', '每日'], [1, 'weekly', '每周']]) {
+        const px = l.width / 2 - 68 + i * 72, py = y + 106, active = (app.raceKind || 'daily') === kind;
+        rounded(c, px, py + 6, 64, 30, 15, active ? COLORS.mint : COLORS.paper, COLORS.line);
+        text(c, label, px + 32, py + 21, 13, active ? COLORS.green : COLORS.muted, 'center');
+        view.buttons.push({ id: 'rank-' + kind, label, x: px, y: py, width: 64, height: 44 });
+    }
+    const footer = y + height - 60;
+    if (app.rankTab === 'friends') {
+        if (app.platform.drawFriends) app.platform.drawFriends(c, { x: x + 22, y: y + 156, width: width - 44, height: height - 226 });
+        else {
+            text(c, '请在微信中查看好友榜', l.width / 2, y + 215, 14, COLORS.muted, 'center');
+            text(c, '完成本期10关后记录我的成绩', l.width / 2, footer - 35, 13, COLORS.muted, 'center');
+        }
+        const third = (width - 56) / 3;
+        view.button('rank-authorize', app.platform.rankState?.authorizing ? '请求中' : app.platform.rankState?.authorization === 'granted' ? '已授权' : '好友授权', x + 20, footer, third, 44);
+        view.button('rank-refresh', '刷新', x + 28 + third, footer, third, 44);
+        view.button('race-friend-page', '下一页', x + 36 + third * 2, footer, third, 44);
+    } else {
+        try {
+            const records = read(app.platform.storage).filter(r => r.kind === (app.raceKind || 'daily')).sort((a,b) => b.period.localeCompare(a.period) || (b.version || 1)-(a.version || 1) || a.elapsed-b.elapsed);
+            const count = Math.max(1, Math.floor((height - 260) / 42)), pages = Math.max(1, Math.ceil(records.length / count)), page = (app.historyPage || 0) % pages;
+            if (!records.length) text(c, '暂无完成10关的成绩', l.width / 2, y + 215, 14, COLORS.muted, 'center');
+            records.slice(page * count, (page + 1) * count).forEach((r,i) => text(c, r.period.slice(-10) + ' v' + (r.version || 1) + '  ' + format(r.elapsed), l.width / 2, y + 180 + i * 42, 14, COLORS.ink, 'center'));
+            text(c, '第' + (page + 1) + '/' + pages + '页 · 同期同版本按用时排名', l.width / 2, footer - 47, 11, COLORS.muted, 'center');
+        } catch { text(c, '读取失败，原成绩已保留', l.width / 2, y + 215, 14, COLORS.red, 'center'); }
+        if (app.historyNotice) text(c, app.historyNotice, l.width / 2, footer - 22, 12, COLORS.muted, 'center');
+        view.button('race-page', '下一页', x + 20, footer, half, 44);
+        view.button('race-sync', '同步本期最佳', x + 32 + half, footer, half, 44);
+    }
+}
+module.exports = { render };
+
+},
 "src/race/view.js":function(module,exports,require){
 'use strict';
 const { read, format } = require("src/race/history.js");
@@ -9230,19 +9348,19 @@ function dialog(app) {
     const toggle = ['race-period', '切换为' + (kind === '每日' ? '每周' : '每日')];
     let title, description, actions;
     switch (app.modal) {
-        case 'race-locked': title = '竞速尚未解锁'; description = '通关第14关、到达第15关后开启。'; actions = [close]; break;
+        case 'race-locked': title = '竞速尚未解锁'; description = '通关第5关后开启。'; actions = [close]; break;
         case 'race-unlocked': title = '竞速模式已解锁'; description = '主页可进入每日、每周10关竞速，与好友比较总用时。'; actions = [['race-notice-close', '知道了', true]]; break;
-        case 'race-menu': title = kind + '竞速'; description = '10关逐步加难，按总用时排名。北京时间每日零点、每周一零点更新赛道。'; actions = [['race-start', '开始竞速', true], toggle, ['race-friends', '好友榜'], ['race-history', '个人历史成绩'], close]; break;
+        case 'race-menu': title = '竞速模式'; description = ''; actions = [['race-daily', '每日竞速', true], ['race-weekly', '每周竞速', true]]; break;
         case 'race-loading': title = '准备赛道'; description = '正在检查10关的通路…'; actions = [['home', '取消']]; break;
-        case 'race-ready': title = '10关竞速'; description = '从中等难度开始加速变难。不限时、无道具，每关点错3次结束整轮。暂停、切后台和关间等待均计入总用时。'; actions = [['race-accept', '开始计时', true], ['home', '返回首页']]; break;
+        case 'race-ready': title = '10关竞速'; description = '从中等难度开始加速变难。不限时、不限点错次数、无道具。暂停、切后台和关间等待均计入总用时。'; actions = [['race-accept', '开始计时', true], ['home', '返回首页']]; break;
         case 'race-error': title = '赛道准备失败'; description = '请重试。'; actions = [['race-retry', '重试', true], ['home', '返回首页']]; break;
         case 'race-finished': title = '10关全部完成'; description = '总用时 ' + format(app.race.finishedElapsed) + '\n' + (app.race.saveError ? '本机保存失败，请重试' : '个人成绩已保存') + '\n' + (app.race.publishStatus || '微信中可同步好友成绩'); actions = [['race-retry-save', '重试保存 / 同步'], ['race-retry', '再跑一轮', true], ['home', '返回首页']]; break;
         case 'race-history': {
             title = kind + '个人历史';
             try {
-                const records = read(app.platform.storage).filter(r => r.kind === (app.raceKind || 'daily')).sort((a, b) => b.period.localeCompare(a.period) || a.elapsed - b.elapsed);
+                const records = read(app.platform.storage).filter(r => r.kind === (app.raceKind || 'daily')).sort((a, b) => b.period.localeCompare(a.period) || (b.version || 1) - (a.version || 1) || a.elapsed - b.elapsed);
                 const pages = Math.max(1, Math.ceil(records.length / 3)), page = (app.historyPage || 0) % pages;
-                description = records.length ? records.slice(page * 3, page * 3 + 3).map(r => r.period.slice(-10) + '  ' + format(r.elapsed)).join('\n') + '\n第' + (page + 1) + '/' + pages + '页 · 同期用时升序' : '暂无完成10关的成绩';
+                description = records.length ? records.slice(page * 3, page * 3 + 3).map(r => r.period.slice(-10) + ' v' + (r.version || 1) + ' ' + format(r.elapsed)).join('\n') + '\n第' + (page + 1) + '/' + pages + '页 · 同期用时升序' : '暂无完成10关的成绩';
                 if (app.historyNotice) description += '\n' + app.historyNotice;
             } catch { description = '历史成绩读取失败，原记录已保留'; }
             actions = [['race-page', '下一页'], ['race-sync', '同步本期最佳到好友榜'], toggle, back]; break;

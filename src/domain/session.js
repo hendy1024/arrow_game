@@ -10,6 +10,7 @@ class Session {
         this.level = clone(level);
         this.restartLevel = null;
         this.items = { time: 1, life: 1, shuffle: 1 };
+        this.itemUses = { time: 0, life: 0, shuffle: 0 };
         this.removed = new Set();
         this.moves = new Map();
         this.feedback = new Map();
@@ -67,7 +68,8 @@ class Session {
             }
         }
         else if (result.type === 'allowed') {
-            this.moves.set(id, { id, distance: 0, elapsedMs: 0 });
+            const speed = CONFIG.speed + exitCells(result.arrow, this.level).length * CONFIG.distanceSpeed;
+            this.moves.set(id, { id, distance: 0, elapsedMs: 0, speed });
             this.emit('move-start', { id });
         }
         return result;
@@ -91,7 +93,7 @@ class Session {
             throw new Error('Invalid elapsed time');
         if (this.state === 'playing' && this.remainingMs !== null) {
             if (this.moves.size === this.remaining && this.remaining > 0) {
-                const finish = Math.max(...[...this.moves].map(([id, move]) => Math.max(0, completionDistance(this.level.arrows.find(a => a.id === id), this.level) * 1000 / CONFIG.speed - move.elapsedMs)));
+                const finish = Math.max(...[...this.moves].map(([id, move]) => Math.max(0, completionDistance(this.level.arrows.find(a => a.id === id), this.level) * 1000 / move.speed - move.elapsedMs)));
                 if (finish < this.remainingMs && finish <= ms) ms = finish;
             }
             const elapsed = Math.min(ms, this.remainingMs);
@@ -106,8 +108,8 @@ class Session {
         for (const [id, move] of this.moves) {
             const arrow = this.level.arrows.find(a => a.id === id);
             move.elapsedMs += ms;
-            move.distance = move.elapsedMs * CONFIG.speed / 1000;
-            if (move.distance >= completionDistance(arrow, this.level))
+            move.distance = move.elapsedMs * move.speed / 1000;
+            if (move.distance + 1e-9 >= completionDistance(arrow, this.level))
                 this.complete(id);
         }
     }

@@ -11,12 +11,12 @@ function* courseRoundSteps(periodKey, round, options = {}) {
     const p = profile(round), seed = seedFor(periodKey, round), rng = random(seed);
     for (let attempt = 0; attempt < (options.maxAttempts ?? 64); attempt++) {
         const level = yield* candidate(3, seed, p, rng);
-        level.number = round; level.lifeLimit = 3; level.timeLimitMs = null; level.raceVersion = VERSION;
+        level.number = round; level.lifeLimit = null; level.timeLimitMs = null; level.raceVersion = VERSION;
         const validation = solve(level);
         if (validation.valid && acceptable(validation.metrics, p)) return level;
     }
     const result = JSON.parse(JSON.stringify(require('./fallbacks')[round - 1]));
-    result.seed = seed; result.raceVersion = VERSION;
+    result.lifeLimit = null; result.seed = seed; result.raceVersion = VERSION;
     if (!solve(result).valid) throw Error('Invalid race fallback');
     return result;
 }

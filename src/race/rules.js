@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = 1;
+const VERSION = 2;
 const ROUNDS = 10;
 const OFFSET = 8 * 60 * 60 * 1000;
 function period(kind, now = Date.now()) {
@@ -20,6 +20,6 @@ function difficulty(round) {
     if (!Number.isInteger(round) || round < 1 || round > ROUNDS) throw Error('Invalid race round');
     const progress = (round - 1) / (ROUNDS - 1);
     const size = Math.round(10 * Math.pow(2, progress));
-    return { round, size, factor: Math.pow(8, progress), minDepth: Math.round(2 * Math.pow(8, progress)), lifeLimit: 3, timeLimitMs: null };
+    return { round, size, factor: Math.pow(8, progress), minDepth: Math.round(2 * Math.pow(8, progress)), lifeLimit: null, timeLimitMs: null };
 }
 module.exports = { VERSION, ROUNDS, period, seedFor, difficulty };

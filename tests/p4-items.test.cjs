@@ -15,13 +15,14 @@ test('P4 挑战20关解锁，19关通关提示且确认后不重复', () => {
     a.action('rush-notice-close'); assert.equal(a.modal, 'won'); assert.equal(a.challengeUnlockSeen, true);
     const b = make(); restore(b, snapshot(a)); assert.equal(b.modal, null); assert.equal(b.challengeUnlockSeen, true);
 });
-test('P4 道具每局一次，加时和加命持久化、重载不补道具', async () => {
+test('P4 道具共用10个库存，连续加时加命持久化、重载不补库存', async () => {
     const a = make(); await a.start(25); a.action('life-accept'); a.session.tick(1000);
     a.action('items'); const before = a.session.remainingMs; a.tick(5000); assert.equal(a.session.remainingMs, before);
-    a.action('item-time'); a.action('item-time'); assert.equal(a.session.remainingMs, before + 30000);
-    a.action('item-life'); a.action('item-life'); assert.equal(a.session.lives, 4);
+    a.action('item-time'); a.action('item-time'); assert.equal(a.session.remainingMs, before + 60000);
+    a.action('item-life'); a.action('item-life'); assert.equal(a.session.lives, 5);
+    assert.deepEqual(a.inventory, { time: 8, life: 8, shuffle: 10 });
     const values = new Map(), store = createStore({ get: k => values.get(k), set: (k, v) => values.set(k, v) }); store.save(snapshot(a));
-    const b = make(); restore(b, store.load().data); assert.equal(b.session.items.time, 0); assert.equal(b.session.items.life, 0); assert.equal(b.session.lives, 4);
+    const b = make(); restore(b, store.load().data); assert.equal(b.session.items.time, 0); assert.equal(b.session.items.life, 0); assert.equal(b.session.lives, 5); assert.deepEqual(b.inventory, a.inventory);
 });
 test('P4 重排保留剩余数量和资源且可解，重复请求不多扣，重试恢复原关', async () => {
     const a = make(); await a.start(25); a.action('life-accept');
@@ -30,10 +31,10 @@ test('P4 重排保留剩余数量和资源且可解，重复请求不多扣，�
     const remaining = a.session.remaining, time = a.session.remainingMs, lives = a.session.lives;
     a.action('items'); const task = a.action('item-shuffle'); a.action('item-shuffle'); await task;
     assert.equal(a.session.remaining, remaining); assert.equal(a.session.remainingMs, time); assert.equal(a.session.lives, lives);
-    assert.equal(a.session.items.shuffle, 0); assert.ok(solve(a.session.level).valid); assert.notEqual(JSON.stringify(a.session.level), original);
+    assert.equal(a.session.items.shuffle, 0); assert.equal(a.inventory.shuffle, 9); assert.ok(solve(a.session.level).valid); assert.notEqual(JSON.stringify(a.session.level), original);
     const b = make(); restore(b, snapshot(a)); assert.equal(b.session.remaining, remaining); assert.equal(b.session.items.shuffle, 0);
     assert.equal(JSON.stringify(b.session.restart().level), original);
-    assert.equal(b.session.restart().items.shuffle, 1);
+    assert.equal(b.session.restart().items.shuffle, 1); assert.equal(b.inventory.shuffle, 9);
 });
 test('P4 重排生成失败仍有同数量可解保底，移动和终态禁止道具', async () => {
     const a = make(); await a.start(3); a.action('life-accept'); const id = solve(a.session.level).sequence[0];

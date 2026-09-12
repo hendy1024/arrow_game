@@ -11,7 +11,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
         if (await evaluate(expression))
             return;
         await delay(25);
-    } throw new Error('Condition timed out: ' + expression); }
+    } throw new Error('Condition timed out: ' + expression + ' ' + await evaluate('JSON.stringify({modal:__arrowDebug.app.modal,loading:__arrowDebug.app.loading,error:__arrowDebug.app.loadError,screen:__arrowDebug.app.screen})')); }
     async function capture(name) { const { data } = await c.send('Page.captureScreenshot', { format: 'png' }, s); fs.writeFileSync(path.join(dir, name + '.png'), Buffer.from(data, 'base64')); report.screenshots.push(name + '.png'); }
     async function mouse(x, y) { await c.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, s); await c.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, s); }
     async function button(id) { const p = await evaluate(`(()=>{const b=__arrowDebug.view.buttons.find(b=>b.id===${JSON.stringify(id)});if(!b)throw Error('Missing button');const r=document.querySelector('canvas').getBoundingClientRect();return [r.x+b.x+b.width/2,r.y+b.y+b.height/2];})()`); await mouse(...p); }
@@ -189,17 +189,18 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
         });
         await t.test('真实点击三种道具，重排剩余数量不变且刷新不补道具', async () => {
             await button('start'); await until('__arrowDebug.app.screen==="game"');
-            await button('items');
+            assert.equal(await evaluate('__arrowDebug.view.buttons.some(b=>b.id==="items")'), false);
             const count = await evaluate('__arrowDebug.app.session.remaining'), before = await evaluate('__arrowDebug.app.session.remainingMs');
             await button('item-time'); await button('item-time');
-            assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'), before + 30000);
+            assert.equal(await evaluate('__arrowDebug.app.inventory.time'), 8);
+            const after = await evaluate('__arrowDebug.app.session.remainingMs'); assert.ok(after > before + 59000 && after <= before + 60000);
             await button('item-life'); assert.equal(await evaluate('__arrowDebug.app.session.lives'), 4);
-            await button('item-shuffle'); await until('__arrowDebug.app.modal==="items" && __arrowDebug.app.session.items.shuffle===0');
+            await button('item-shuffle'); await until('__arrowDebug.app.modal===null && __arrowDebug.app.inventory.shuffle===9');
             assert.equal(await evaluate('__arrowDebug.app.session.remaining'), count);
             assert.equal(await evaluate('__arrowDebug.solve(__arrowDebug.app.session.level).valid'), true);
             await capture('items-used');
             await c.send('Page.reload', {}, s); await until('!!window.__arrowDebug');
-            assert.equal(await evaluate('__arrowDebug.app.session.items.shuffle'), 0);
+            assert.equal(await evaluate('__arrowDebug.app.session.items.shuffle'), 0); assert.equal(await evaluate('__arrowDebug.app.inventory.shuffle'), 9);
             assert.equal(await evaluate('__arrowDebug.app.session.lives'), 4);
             report.checks.push('items-and-reshuffle-persistence');
         });
