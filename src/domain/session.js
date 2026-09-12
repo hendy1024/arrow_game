@@ -17,6 +17,7 @@ class Session {
         this.lives = level.lifeLimit;
         this.state = 'playing';
         this.time = 0;
+        this.recordMs = 0; this.recordEligible = true;
         this.events = [];
         this.remainingMs = level.timeLimitMs ?? null;
         this.failureReason = null;

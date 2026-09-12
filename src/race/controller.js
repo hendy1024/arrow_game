@@ -1,9 +1,9 @@
 'use strict';
-const { period, VERSION } = require('./rules');
+const { period, VERSION, ROUNDS } = require('./rules');
 const { Session } = require('../domain/session');
 const history = require('./history');
 const now = app => app.platform.now ? app.platform.now() : Date.now();
-function elapsed(app) { return app.race?.finishedElapsed ?? Math.max(0, now(app) - (app.race?.startedAt ?? now(app))); }
+function elapsed(app) { return app.race?.finishedElapsed ?? Math.max(0, (app.race?.transitionAt ?? now(app)) - (app.race?.startedAt ?? now(app)) - (app.race?.transitionMs || 0)); }
 async function prepare(app) {
     const token = ++app.token;
     app.loading = true; app.modal = 'race-loading'; app.changed();
@@ -16,12 +16,13 @@ async function prepare(app) {
 }
 function startRound(app) {
     app.session = new Session({ ...app.race.course[app.race.index], lifeLimit: null }); app.currentLevel = app.race.index + 1;
+    if (app.race.transitionAt !== undefined) { app.race.transitionMs = (app.race.transitionMs || 0) + now(app) - app.race.transitionAt; delete app.race.transitionAt; }
     app.tutorialStep = 0; app.screen = 'game'; app.modal = null; app.changed();
 }
 function sync(app) {
     if (app.session.state === 'failed' && !app.session.moves.size) app.modal = 'failed';
     if (app.session.state !== 'won') return;
-    if (app.race.index < 9) { app.modal = 'won'; return; }
+    if (app.race.index < ROUNDS - 1) { app.race.transitionAt ??= now(app); app.modal = 'won'; return; }
     if (app.race.finishedElapsed === undefined) {
         app.race.finishedElapsed = Math.max(1, elapsed(app));
         app.race.record = { id: app.race.event.key + ':' + app.race.startedAt, kind: app.race.event.kind, period: app.race.event.key, version: VERSION, elapsed: app.race.finishedElapsed, finishedAt: now(app) };
@@ -87,7 +88,7 @@ function action(app, name) {
         if (period(app.raceKind, now(app)).key !== app.race.event.key) return handled(prepare(app));
         app.race.startedAt = now(app); startRound(app); return handled();
     }
-    if (name === 'next' && app.modal === 'won' && app.race.index < 9) { app.race.index++; startRound(app); return handled(); }
+    if (name === 'next' && app.modal === 'won' && app.race.index < ROUNDS - 1) { app.race.index++; startRound(app); return handled(); }
     if (name === 'race-retry-save' && app.modal === 'race-finished') { persistResult(app); app.changed(); return handled(); }
     if ((name === 'restart' && ['restart', 'failed'].includes(app.modal)) || name === 'race-retry' && ['race-error', 'race-finished'].includes(app.modal)) return handled(prepare(app));
     if (name === 'home' && app.modal) {

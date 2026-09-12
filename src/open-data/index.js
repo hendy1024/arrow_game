@@ -35,7 +35,7 @@ wx.onMessage(data => {
         const cloud = score(result.KVDataList, key, expected, data.version);
         if (cloud !== null && (mine === null || cloud <= mine)) { mine = cloud; mineStatus = '本期成绩已同步'; }
         else if (mine !== null) mineStatus = '本机成绩待同步，请到个人榜同步';
-        else mineStatus = data.oldVersion ? '本期旧版成绩在个人榜，新版需重跑' : '完成本期10关后即可记录成绩';
+        else mineStatus = data.oldVersion ? '本期旧版成绩在个人榜，新版需重跑' : '完成本期5关后即可记录成绩';
         draw();
     }, fail() { if (token !== request) return; mineStatus = mine === null ? '我的成绩读取失败，请刷新' : '本机成绩 · 同步状态未确认'; draw(); } });
     else { mineStatus = '请在微信中读取本人托管成绩'; draw(); }
@@ -43,6 +43,6 @@ wx.onMessage(data => {
     wx.getFriendCloudStorage({ keyList: [key], success(result) {
         if (token !== request) return;
         rows = (result.data || []).flatMap(user => { const elapsed = score(user.KVDataList, key, expected, data.version); return elapsed === null ? [] : [{ nickname: user.nickname, elapsed }]; }).sort((a,b) => a.elapsed-b.elapsed || String(a.nickname).localeCompare(String(b.nickname)));
-        message = rows.length ? '' : '暂无好友完成本期10关'; draw();
+        message = rows.length ? '' : '暂无好友完成本期5关'; draw();
     }, fail() { if (token !== request) return; message = '好友成绩读取失败，请点击刷新'; draw(); } });
 });

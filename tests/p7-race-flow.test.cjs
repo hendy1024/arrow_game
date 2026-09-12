@@ -10,17 +10,17 @@ const fallbacks=require('../src/race/fallbacks');
 function setup(){let time=Date.parse('2026-09-12T01:00:00Z');const data=new Map();const app=new Controller({now:()=>time,seed:()=>1,feedback(){},storage:{get:k=>data.get(k),set:(k,v)=>data.set(k,v)}});app.unlocked=6;app.raceUnlockSeen=true;app.lifeIntroDone=true;app.raceGenerate=async()=>JSON.parse(JSON.stringify(fallbacks));return {app,advance:ms=>time+=ms,data};}
 async function start(app){app.action('race');await app.action('race-start');app.action('race-accept');}
 function clear(app){for(const id of solve(app.session.level).sequence){assert.equal(app.clickArrow(id).type,'allowed');app.tick(10000);}}
-test('P7 每日每周赛道可解、确定生成、十关密度和依赖符合验收，兜底亦符合',()=>{
- for(const key of ['daily:2026-09-12','daily:2026-09-13','weekly:2026-09-07'])for(let n=1;n<=10;n++){
- const a=generateRound(key,n),b=generateRound(key,n);assert.deepEqual(a,b);const v=solve(a);assert.ok(v.valid);assert.ok(acceptable(v.metrics,profile(n)));assert.equal(a.lifeLimit,null);assert.equal(a.timeLimitMs,null);assert.ok(acceptable(solve(generateRound(key,n,{maxAttempts:0})).metrics,profile(n)));
+test('P7 每日每周赛道可解、确定生成、五关密度和依赖符合验收，兜底亦符合',()=>{
+ for(const key of ['daily:2026-09-12','daily:2026-09-13','weekly:2026-09-07'])for(let n=1;n<=5;n++){
+ const a=generateRound(key,n),b=generateRound(key,n);assert.deepEqual(a,b);const v=solve(a);assert.ok(v.valid);assert.ok(acceptable(v.metrics,profile(n,key.split(':')[0])));assert.equal(a.lifeLimit,null);assert.equal(a.timeLimitMs,null);assert.ok(acceptable(solve(generateRound(key,n,{maxAttempts:0})).metrics,profile(n,key.split(':')[0])));
  }
  assert.notDeepEqual(generateRound('daily:2026-09-12',1).arrows,generateRound('daily:2026-09-13',1).arrows);
 });
-test('P7 解锁、十关实际移动通关记录、暂停计时、无道具、进度隔离',async()=>{
+test('P7 解锁、五关实际移动通关记录、暂停计时、无道具、进度隔离',async()=>{
  const {app,advance}=setup();app.unlocked=5;app.action('race');assert.equal(app.modal,'race-locked');app.action('race-close');app.unlocked=6;
  const before=snapshot(app);await start(app);assert.equal(app.modal,null);app.action('items');assert.equal(app.modal,null);app.action('pause');advance(6000);assert.equal(require('../src/race/controller').elapsed(app),6000);app.action('resume');
- for(let n=1;n<=10;n++){assert.equal(app.currentLevel,n);assert.equal(app.session.remainingMs,null);assert.equal(app.session.lives,null);advance(10000);clear(app);assert.equal(app.modal,n===10?'race-finished':'won');if(n<10)app.action('next');}
- assert.equal(history.read(app.platform.storage)[0].elapsed,106000);assert.deepEqual(snapshot(app),before);app.action('race-retry-save');assert.equal(history.read(app.platform.storage).length,1);app.action('home');assert.equal(app.mode,'campaign');assert.deepEqual(snapshot(app),before);
+ for(let n=1;n<=5;n++){assert.equal(app.currentLevel,n);assert.equal(app.session.remainingMs,null);assert.equal(app.session.lives,null);advance(10000);clear(app);assert.equal(app.modal,n===5?'race-finished':'won');if(n<5){const frozen=require('../src/race/controller').elapsed(app);advance(30000);app.syncModal();assert.equal(require('../src/race/controller').elapsed(app),frozen);app.action('next');assert.equal(require('../src/race/controller').elapsed(app),frozen);}}
+ assert.equal(history.read(app.platform.storage)[0].elapsed,56000);assert.deepEqual(snapshot(app),before);app.action('race-retry-save');assert.equal(history.read(app.platform.storage).length,1);app.action('home');assert.equal(app.mode,'campaign');assert.deepEqual(snapshot(app),before);
 });
 test('P7 竞速点错不限次数，无失败扣命，主动重跑回第一关且未完成不入榜',async()=>{
  const {app}=setup();await start(app);clear(app);app.action('next');const id=app.session.level.arrows.find(a=>app.session.classify(a.id).type==='blocked').id;

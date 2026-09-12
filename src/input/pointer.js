@@ -1,7 +1,7 @@
 'use strict';
 const { segmentDistance } = require('../movement/path');
 const { DIRS } = require('../domain/board');
-function hitArrow(level, point, removed = new Set(), paths = new Map(), tolerance = .32) {
+function hitArrow(level, point, removed = new Set(), paths = new Map(), tolerance = .48) {
     let best = null, distance = Infinity;
     for (const a of level.arrows) {
         if (removed.has(a.id))

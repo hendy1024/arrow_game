@@ -14,25 +14,30 @@ function snapshot(app) {
     if (app.session) {
         const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
         session = { level: clone(s.level), removed, lives: s.lives, state: s.state === 'failed' ? 'failed' : removed.length === s.level.arrows.length ? 'won' : 'playing' };
+        session.recordMs = s.recordMs; session.recordEligible = s.recordEligible && s.moves.size === 0;
         session.remainingMs = s.remainingMs;
         session.failureReason = s.failureReason;
         session.items = { ...s.items }; session.itemUses = { ...s.itemUses };
         session.restartLevel = clone(s.restartLevel);
     }
-    return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, inventory: { ...app.inventory }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
+    return { rewardClaims: [...app.rewardClaims], levelBests: { ...app.levelBests }, version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, inventory: { ...app.inventory }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
 }
 function validProgress(p) { return Number.isInteger(p) && p >= 1 && p < 1000000; }
 function validate(data) {
     if (!data || data.version !== 1 || !validProgress(data.currentLevel) || !validProgress(data.unlocked) || typeof data.tutorialDone !== 'boolean' || typeof data.lifeIntroDone !== 'boolean' || typeof data.settings?.sound !== 'boolean' || typeof data.settings?.vibration !== 'boolean')
         return false;
-    if (data.inventory && !['time', 'life', 'shuffle'].every(k => Number.isInteger(data.inventory[k]) && data.inventory[k] >= 0 && data.inventory[k] <= 10)) return false;
+    if (data.inventory && !['time', 'life', 'shuffle'].every(k => Number.isInteger(data.inventory[k]) && data.inventory[k] >= 0 && data.inventory[k] <= 10000000)) return false;
+    if (data.rewardClaims !== undefined && (!Array.isArray(data.rewardClaims) || new Set(data.rewardClaims).size !== data.rewardClaims.length || !data.rewardClaims.every(validProgress))) return false;
+    if (data.levelBests !== undefined && (!data.levelBests || typeof data.levelBests !== 'object' || Array.isArray(data.levelBests) || !Object.entries(data.levelBests).every(([k,v]) => /^\d+:\d+$/.test(k) && Number.isFinite(v) && v > 0))) return false;
     if (data.session === null)
         return true;
     const s = data.session;
+    if (s?.recordMs !== undefined && (!Number.isFinite(s.recordMs) || s.recordMs < 0)) return false;
+    if (s?.recordEligible !== undefined && typeof s.recordEligible !== 'boolean') return false;
     const items = s?.items || { time: 1, life: 1, shuffle: 1 };
     if (!['time', 'life', 'shuffle'].every(k => items[k] === 0 || items[k] === 1)) return false;
     const uses = s?.itemUses || Object.fromEntries(Object.entries(items).map(([k,v]) => [k, 1-v]));
-    if (!['time', 'life', 'shuffle'].every(k => Number.isInteger(uses[k]) && uses[k] >= 0 && uses[k] <= 11)) return false;
+    if (!['time', 'life', 'shuffle'].every(k => Number.isInteger(uses[k]) && uses[k] >= 0 && uses[k] <= 10000000)) return false;
     if (s?.restartLevel && (!validateLevel(s.restartLevel).valid || !solve(s.restartLevel).valid || s.restartLevel.number !== data.currentLevel)) return false;
     if (!s || !validateLevel(s.level).valid || !solve(s.level).valid || !validProgress(s.level.number) || s.level.number !== data.currentLevel || !Array.isArray(s.removed) || new Set(s.removed).size !== s.removed.length)
         return false;
@@ -97,13 +102,16 @@ function restore(app, data) {
     app.inventory = { ...(data.inventory || { time: 10, life: 10, shuffle: 10 }) };
     app.challengeUnlockSeen = !!data.challengeUnlockSeen;
     app.raceUnlockSeen = !!data.raceUnlockSeen;
+    app.rewardClaims = data.rewardClaims ? [...data.rewardClaims] : Array.from({ length: Math.min(data.unlocked - 1, require('../campaign/catalog').levels.length) }, (_,i) => i + 1);
+    app.levelBests = { ...(data.levelBests || {}) }; app.rewardNotice = '';
     app.session = null;
     if (data.session) {
         const state = data.session;
         app.session = new Session(state.level);
         app.session.removed = new Set(state.removed);
         app.session.lives = state.lives;
-        if (state.level.lifeLimit === null && lifeLimit(state.level.number) !== null) {
+        app.session.recordMs = state.recordMs || 0; app.session.recordEligible = state.recordEligible === true;
+        if (!state.level.campaignConfigured && state.level.lifeLimit === null && lifeLimit(state.level.number) !== null) {
             app.session.level.lifeLimit = lifeLimit(state.level.number);
             app.session.lives = app.session.level.lifeLimit;
         }

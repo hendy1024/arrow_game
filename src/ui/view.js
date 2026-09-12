@@ -35,6 +35,7 @@ class View {
         c.fillRect(0, 0, l.width, l.height);
         if (app.screen === 'home')
             this.home(app, l);
+        else if (app.screen === 'map') require('../campaign/view').draw(this, app, l, text, COLORS);
         else
             this.game(app, l);
         if (app.modal)
@@ -49,7 +50,7 @@ class View {
     home(app, l) {
         const c = this.ctx, w = l.width, usable = l.bottom - l.top;
         this.button('rank', '排行榜', w - 96, l.top, 80, 44);
-        text(c, 'ARROW GARDEN', 82, l.top + 22, 11, COLORS.muted, 'center', 500);
+        if (!app.retryRead) this.button('level-map', '关卡总览', 16, l.top, 96, 44);
         const titleY = l.top + usable * .12;
         text(c, CONFIG.title, w / 2, titleY, 52, COLORS.ink, 'center', 500);
         text(c, '让每条箭头，找到出口', w / 2, titleY + 43, 14, COLORS.muted, 'center');
@@ -72,7 +73,7 @@ class View {
         const c = this.ctx, w = l.width;
         this.button('pause', 'Ⅱ', 16, l.top, 44, 44);
         text(c, app.mode === 'race' ? '竞速模式' : app.mode === 'challenge' ? '挑战模式' : '箭间', w / 2, l.top + 15, 17, COLORS.ink, 'center', 500);
-        text(c, app.mode === 'race' ? '第 ' + app.currentLevel + ' / 10 关' : app.mode === 'challenge' ? '20×20 · 4块障碍' : '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
+        text(c, app.mode === 'race' ? '第 ' + app.currentLevel + ' / 5 关' : app.mode === 'challenge' ? '20×20 · 4块障碍' : '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
         const s = app.session;
 
         text(c, '剩余箭头', 26, l.top + 80, 12, COLORS.muted);
@@ -207,6 +208,8 @@ class View {
                 actions = [['challenge-accept', '开始挑战', true]];
                 break;
         }
+        if (app.modal === 'level-detail') ({ title, description, actions } = require('../campaign/view').detail(app));
+        if (app.modal === 'won' && app.mode === 'campaign') { description += app.rewardNotice ? '\n' + app.rewardNotice : ''; actions = [['next', app.currentLevel >= require('../campaign/catalog').levels.length ? '查看总览' : '下一关', true], ['level-map', '关卡总览'], ['home', '返回首页']]; }
         const raceDialog = require('../race/view').dialog(app);
         if (raceDialog) ({ title, description, actions } = raceDialog);
         const boxWidth = Math.min(w - 40, 340), lines = wrap(c, description, boxWidth - 48), boxHeight = 106 + lines.length * 23 + actions.length * 58 + 12, x = (w - boxWidth) / 2, y = Math.max(l.top, (l.height - boxHeight) / 2);

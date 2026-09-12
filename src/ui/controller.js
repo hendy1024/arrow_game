@@ -6,6 +6,7 @@ class Controller {
     constructor(platform, options = {}) {
         this.platform = platform;
         this.generate = options.generate || generateAsync;
+        this.fixedCampaign = !options.generate;
         this.screen = 'home';
         this.modal = null;
         this.session = null;
@@ -29,6 +30,7 @@ class Controller {
         this.campaignSnapshot = null;
         this.challengeUnlockSeen = false;
         this.raceUnlockSeen = false;
+        this.rewardClaims = []; this.levelBests = {}; this.rewardNotice = "";
     }
     changed() { this.dirty = true; this.onChange(); }
     say(message, duration = CONFIG.messageMs) { this.message = message; this.messageUntil = this.clock + duration; this.dirty = true; }
@@ -50,7 +52,7 @@ class Controller {
         this.message = '';
         this.changed();
         try {
-            const result = await this.generate(number, this.platform.seed());
+            const result = await (this.mode === 'campaign' && this.fixedCampaign ? require('../campaign/catalog').load(number) : this.generate(number, this.platform.seed()));
             if (token !== this.token)
                 return;
             this.session = new Session(this.mode === 'challenge' ? { ...result.level, timeLimitMs: 90000, lifeLimit: 3 } : result.level);
@@ -74,7 +76,7 @@ class Controller {
             this.tutorialStep = 1;
         else
             this.tutorialStep = 0;
-        if (lifeLimit(this.session.level.number) !== null && !this.lifeIntroDone) {
+        if (this.session.level.lifeLimit !== null && !this.lifeIntroDone) {
             this.session.pause();
             this.modal = 'life-intro';
         }
@@ -121,6 +123,7 @@ class Controller {
     events() {
         if (!this.session)
             return;
+        if (this.mode === 'campaign' && this.session.state === 'won') require('../campaign/catalog').completed(this);
         for (const event of this.session.drainEvents()) {
             if (event.type === 'blocked') {
                 this.say(this.session.lives === null ? '前方有阻挡' : '前方有阻挡，机会 −1');
@@ -145,6 +148,7 @@ class Controller {
     tick(ms) {
         require('../race/controller').refreshFriends(this);
         if (this.screen === 'game' && this.session && !this.loading) {
+            if (this.mode === 'campaign' && this.session.state === 'playing') this.session.recordMs += require('../campaign/catalog').activeMs(this.session, ms);
             this.session.tick(ms);
             this.events();
         }
@@ -158,6 +162,7 @@ class Controller {
     }
     action(name) {
         if (name === 'dismiss-modal' && this.modal) return require('./dismiss').dismiss(this);
+        if (require('../campaign/controller').action(this, name)) return;
         const raceAction = require('../race/controller').action(this, name);
         if (raceAction.handled) return raceAction.result;
         if (name === 'rush-notice-close' && ['rush-locked', 'rush-unlocked'].includes(this.modal)) {
@@ -271,6 +276,7 @@ class Controller {
             this.session.resume();
         }
         else if (name === 'next' && this.modal === 'won') {
+            if (this.mode === 'campaign' && this.session.level.number >= require('../campaign/catalog').levels.length) return this.action('level-map');
             const number = this.mode === 'challenge' ? 30 : this.session.level.number + 1;
             this.session = null;
             this.currentLevel = number;

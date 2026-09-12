@@ -9,7 +9,8 @@ function bundle(entry) {
         if (modules.has(id))
             return id;
         modules.set(id, '');
-        const source = fs.readFileSync(file, 'utf8').replace(/require\(['"](\.[^'"]+)['"]\)/g, (_, ref) => {
+        const raw = fs.readFileSync(file, 'utf8');
+        const source = (path.extname(file) === '.json' ? 'module.exports=' + JSON.stringify(JSON.parse(raw)) + ';' : raw).replace(/require\(['"](\.[^'"]+)['"]\)/g, (_, ref) => {
             const target = path.resolve(path.dirname(file), ref + (path.extname(ref) ? '' : '.js'));
             return `require(${JSON.stringify(visit(target))})`;
         });
@@ -20,6 +21,8 @@ function bundle(entry) {
     return `(function(){'use strict';const modules={${[...modules].map(([key, source]) => `${JSON.stringify(key)}:function(module,exports,require){\n${source}\n}`).join(',\n')}};const cache={};function require(id){if(cache[id])return cache[id].exports;const module={exports:{}};cache[id]=module;if(!modules[id])throw new Error('Missing module '+id);modules[id](module,module.exports,require);return module.exports;}require(${JSON.stringify(id)});})();\n`;
 }
 function build() {
+    require('./check-campaign.cjs').check();
+    require('./race-fallbacks.cjs').prepare();
     require('./audio.cjs').buildAudio();
     for (const target of ['wechat', 'preview'])
         fs.mkdirSync(path.join(root, 'dist', target), { recursive: true });
@@ -29,6 +32,7 @@ function build() {
     fs.copyFileSync(path.join(root, 'game.json'), path.join(root, 'dist/wechat/game.json'));
     fs.writeFileSync(path.join(root, 'dist/preview/game.js'), bundle('src/main-browser.js'));
     fs.writeFileSync(path.join(root, 'dist/preview/index.html'), '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>箭间 · 本地试玩</title><style>html,body{margin:0;background:#e7e9e1;height:100%;font-family:system-ui}body{display:grid;place-items:center}canvas{width:min(100vw,430px);height:100dvh;max-height:920px;touch-action:none;display:block;background:#f5f3eb}</style><canvas aria-label="箭间游戏棋盘"></canvas><script src="game.js"></script></html>');
+    require('./upload-package.cjs').prepare(root);
     console.log('Built WeChat game and local canvas test harness.');
 }
 if (require.main === module)

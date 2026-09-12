@@ -86,3 +86,9 @@ test('P2 远箭头提速后按实际出界时刻赢过倒计时，不提前消�
     s.tick(1000); assert.equal(s.state, 'won'); assert.equal(s.remaining, 0);
     assert.ok(Math.abs(s.remainingMs - 58.5) < 1e-8);
 });
+
+test('P2 扩大点击容错且选择最近箭头，边界外与已消除箭头不误触',()=>{
+ const l=level([arrow('a',[[0,1],[2,1]],'right'),arrow('b',[[0,2],[2,2]],'right')]);
+ assert.equal(hitArrow(l,[.5,1.45]),'a');assert.equal(hitArrow(l,[.5,1.55]),'b');
+ assert.equal(hitArrow(l,[.5,.51]),null);assert.equal(hitArrow(l,[.5,1.45],new Set(['a'])),null);
+});

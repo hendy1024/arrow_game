@@ -66,7 +66,7 @@ test('P7 未授权仍读取本人，区分已同步、未完赛及待同步，�
  vm.runInNewContext(fs.readFileSync('src/open-data/index.js','utf8'),{wx:{getSharedCanvas:()=>({width:600,height:700,getContext:()=>ctx}),onMessage:f=>handler=f,getUserCloudStorage:o=>own.push(o),getFriendCloudStorage:o=>friends.push(o)}});
  const msg={type:'show',period:'daily:2026-09-12',version:2,friendsAllowed:false,notice:'请授权'};
  handler(msg);assert.equal(friends.length,0);own.at(-1).success({KVDataList:[{key:'arrow-race-daily-v2',value:JSON.stringify({period:msg.period,version:2,elapsed:12345})}]});assert.ok(drawn.includes('我'));assert.ok(drawn.includes('0:12.3'));assert.ok(drawn.includes('本期成绩已同步'));
- handler(msg);own.at(-1).success({KVDataList:[]});assert.ok(drawn.includes('完成本期10关后即可记录成绩'));assert.ok(!drawn.includes('0:00.0'));
+ handler(msg);own.at(-1).success({KVDataList:[]});assert.ok(drawn.includes('完成本期5关后即可记录成绩'));assert.ok(!drawn.includes('0:00.0'));
  handler({...msg,oldVersion:true});own.at(-1).success({KVDataList:[]});assert.ok(drawn.includes('本期旧版成绩在个人榜，新版需重跑'));
  handler({...msg,localElapsed:11000});own.at(-1).success({KVDataList:[]});assert.ok(drawn.includes('0:11.0'));assert.ok(drawn.includes('本机成绩待同步，请到个人榜同步'));
  handler({...msg,period:'weekly:2026-09-07'});const before=[...drawn];own.at(-2).fail();assert.deepEqual(drawn,before);own.at(-1).fail();assert.ok(drawn.includes('我的成绩读取失败，请刷新'));

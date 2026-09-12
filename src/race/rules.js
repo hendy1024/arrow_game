@@ -1,6 +1,7 @@
 'use strict';
-const VERSION = 2;
-const ROUNDS = 10;
+const { settings, version } = require('./settings');
+const VERSION = version(settings);
+const ROUNDS = 5;
 const OFFSET = 8 * 60 * 60 * 1000;
 function period(kind, now = Date.now()) {
     if (!['daily', 'weekly'].includes(kind) || !Number.isFinite(now)) throw Error('Invalid race period');
@@ -16,10 +17,10 @@ function seedFor(periodKey, round) {
     for (const c of 'race:' + VERSION + ':' + periodKey + ':' + round) { hash ^= c.charCodeAt(0); hash = Math.imul(hash, 16777619); }
     return hash >>> 0;
 }
-function difficulty(round) {
+function difficulty(round, kind = 'weekly') {
+    if (!['daily', 'weekly'].includes(kind)) throw Error('Invalid race kind');
     if (!Number.isInteger(round) || round < 1 || round > ROUNDS) throw Error('Invalid race round');
-    const progress = (round - 1) / (ROUNDS - 1);
-    const size = Math.round(10 * Math.pow(2, progress));
-    return { round, size, factor: Math.pow(8, progress), minDepth: Math.round(2 * Math.pow(8, progress)), lifeLimit: null, timeLimitMs: null };
+    const row = settings[kind][round - 1];
+    return { ...row, round, factor: row.minDepth / settings[kind][0].minDepth, lifeLimit: null, timeLimitMs: null };
 }
 module.exports = { VERSION, ROUNDS, period, seedFor, difficulty };
