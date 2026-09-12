@@ -134,6 +134,9 @@ class Controller {
         this.onChange = () => { };
         this.dirty = true;
         this.savedError = false;
+        this.mode = 'campaign';
+        this.campaignSnapshot = null;
+        this.challengeUnlockSeen = false;
     }
     changed() { this.dirty = true; this.onChange(); }
     say(message, duration = CONFIG.messageMs) { this.message = message; this.messageUntil = this.clock + duration; this.dirty = true; }
@@ -158,7 +161,7 @@ class Controller {
             const result = await this.generate(number, this.platform.seed());
             if (token !== this.token)
                 return;
-            this.session = new Session(result.level);
+            this.session = new Session(this.mode === 'challenge' ? { ...result.level, timeLimitMs: 90000, lifeLimit: 3 } : result.level);
             this.currentLevel = number;
             this.loading = false;
             this.configureIntro();
@@ -174,6 +177,7 @@ class Controller {
         }
     }
     configureIntro() {
+        if (this.mode === 'challenge') { this.tutorialStep = 0; this.session.pause(); this.modal = 'rush-ready'; return; }
         if (this.session.level.number === 1 && !this.tutorialDone)
             this.tutorialStep = 1;
         else
@@ -189,11 +193,12 @@ class Controller {
         }
     }
     syncModal() {
+        if (this.mode !== 'challenge' && this.unlocked >= 20 && !this.challengeUnlockSeen) { this.session.pause(); this.modal = 'rush-unlocked'; return; }
         if (this.session.state === 'won')
             this.modal = 'won';
         else if (this.session.state === 'failed' && (!this.session.moves.size || this.session.failureReason === 'timeout'))
             this.modal = 'failed';
-        else if (this.session.level.lifeLimit !== null && !this.lifeIntroDone) {
+        else if (this.mode !== 'challenge' && this.session.level.lifeLimit !== null && !this.lifeIntroDone) {
             this.session.pause();
             this.modal = 'life-intro';
         }
@@ -231,7 +236,7 @@ class Controller {
             else if (event.type === 'removed')
                 this.platform.feedback('removed', this.settings);
             else if (event.type === 'won') {
-                this.unlocked = Math.max(this.unlocked, this.session.level.number + 1);
+                if (this.mode !== 'challenge') this.unlocked = Math.max(this.unlocked, this.session.level.number + 1);
                 this.platform.feedback('won', this.settings);
             }
             if (event.type === 'removed' || event.type === 'won' || event.type === 'failed')
@@ -254,6 +259,38 @@ class Controller {
         }
     }
     action(name) {
+        if (name === 'rush-notice-close' && ['rush-locked', 'rush-unlocked'].includes(this.modal)) {
+            if (this.modal === 'rush-unlocked') this.challengeUnlockSeen = true;
+            this.modal = null; if (this.screen === 'game' && this.session) this.syncModal(); this.changed(); return;
+        }
+        if (name === 'challenge' && this.screen === 'home' && !this.modal && this.unlocked < 20) { this.modal = 'rush-locked'; this.changed(); return; }
+        if (name === 'challenge' && this.screen === 'home' && !this.modal && !this.loading && !this.retryRead) {
+            this.campaignSnapshot = require("src/persistence/store.js").snapshot(this);
+            this.mode = 'challenge'; this.session = null; this.currentLevel = 30;
+            return this.start(30);
+        }
+        if (name === 'items' && !this.loading && this.session && (this.modal === 'pause' || !this.modal && this.screen === 'game' && this.session.state === 'playing')) {
+            if (this.session.moves.size) { this.say('请等箭头移出后再使用道具'); return; }
+            this.itemsReturn = this.modal; this.session.pause(); this.modal = 'items'; this.changed(); return;
+        }
+        if (name === 'items-done' && this.modal === 'items') { this.modal = this.itemsReturn || null; if (!this.modal) this.session.resume(); this.changed(); return; }
+        if (name.startsWith('item-') && this.modal === 'items') {
+            const kind = name.slice(5), s = this.session;
+            if (!s.items[kind]) return;
+            if (kind === 'time' && s.remainingMs !== null) { s.remainingMs += 30000; s.items.time--; }
+            else if (kind === 'life' && s.lives !== null) { s.lives++; s.items.life--; }
+            else if (kind === 'shuffle') return this.shuffle();
+            this.changed(); return;
+        }
+        if (name === 'rush-accept' && this.modal === 'rush-ready') {
+            this.modal = null; this.session.resume(); this.changed(); return;
+        }
+        if (name === 'home' && this.mode === 'challenge' && (this.modal || this.loadError)) {
+            const settings = { ...this.settings };
+            require("src/persistence/store.js").restore(this, this.campaignSnapshot);
+            this.settings = settings; this.mode = 'campaign'; this.campaignSnapshot = null;
+            this.loading = this.loadError = false; this.message = ''; this.changed(); return;
+        }
         if (name === 'retry-save') {
             if (this.retryRead)
                 this.retryRead();
@@ -288,7 +325,7 @@ class Controller {
         }
         else if (name === 'vibration' && this.modal === 'settings')
             this.settings.vibration = !this.settings.vibration;
-        else if (name === 'reset-progress-ask' && (this.modal === 'settings' || this.screen === 'home' && !this.modal) && !this.retryRead) {
+        else if (name === 'reset-progress-ask' && this.mode !== 'challenge' && (this.modal === 'settings' || this.screen === 'home' && !this.modal) && !this.retryRead) {
             this.resetReturn = this.modal;
             this.modal = 'reset-progress';
         }
@@ -300,6 +337,7 @@ class Controller {
             this.session = null;
             this.currentLevel = this.unlocked = 1;
             this.tutorialDone = this.lifeIntroDone = false;
+            this.challengeUnlockSeen = false;
             this.tutorialStep = 0;
             this.loading = this.loadError = false;
             this.screen = 'home';
@@ -327,7 +365,7 @@ class Controller {
             this.session.resume();
         }
         else if (name === 'next' && this.modal === 'won') {
-            const number = this.session.level.number + 1;
+            const number = this.mode === 'challenge' ? 30 : this.session.level.number + 1;
             this.session = null;
             this.currentLevel = number;
             return this.start(number);
@@ -341,8 +379,23 @@ class Controller {
         }
         this.changed();
     }
+    async shuffle() {
+        const old = this.session, token = ++this.token;
+        this.modal = 'shuffling'; this.changed();
+        try {
+            const level = await require("src/generation/reshuffle.js").reshuffle(old, this.generate, this.platform.seed());
+            if (token !== this.token || this.session !== old) return;
+            const next = new Session(level);
+            next.restartLevel = old.restartLevel || old.level;
+            next.lives = old.lives; next.remainingMs = old.remainingMs;
+            next.items = { ...old.items, shuffle: old.items.shuffle - 1 };
+            next.pause(); this.session = next;
+        } catch { this.say('重排未完成，道具已保留'); }
+        if (token === this.token) { this.modal = 'items'; this.changed(); }
+    }
 }
 module.exports = { Controller };
+
 
 },
 "src/domain/session.js":function(module,exports,require){
@@ -356,6 +409,8 @@ class Session {
         if (!result.valid)
             throw new Error('Invalid level: ' + result.errors.join(','));
         this.level = clone(level);
+        this.restartLevel = null;
+        this.items = { time: 1, life: 1, shuffle: 1 };
         this.removed = new Set();
         this.moves = new Map();
         this.feedback = new Map();
@@ -465,7 +520,7 @@ class Session {
     } return false; }
     resume() { if (this.state === 'paused')
         this.state = 'playing'; }
-    restart() { return new Session(this.level); }
+    restart() { return new Session(this.restartLevel || this.level); }
 }
 module.exports = { Session };
 
@@ -8450,6 +8505,189 @@ module.exports=[
 module.exports={"18:1":{"number":15,"width":18,"height":18,"seed":92015,"generatorVersion":4,"profileVersion":8,"lifeLimit":3,"arrows":[{"id":"a0","path":[[16,14],[17,14],[17,15],[17,16],[17,17]],"direction":"down"},{"id":"a1","path":[[15,9],[15,8],[16,8],[16,9],[17,9],[17,10],[17,11],[17,12],[17,13]],"direction":"down"},{"id":"a2","path":[[14,15],[14,14],[13,14],[13,13],[14,13],[15,13],[16,13]],"direction":"right"},{"id":"a3","path":[[7,14],[7,15],[8,15],[8,14],[9,14],[9,13],[10,13],[11,13],[12,13]],"direction":"right"},{"id":"a4","path":[[4,16],[5,16],[5,15],[5,14],[6,14],[6,13],[7,13],[8,13]],"direction":"right"},{"id":"a5","path":[[1,15],[1,16],[2,16],[2,15],[2,14],[3,14],[4,14],[4,13],[5,13]],"direction":"right"},{"id":"a6","path":[[0,13],[1,13],[2,13],[3,13]],"direction":"right"},{"id":"a7","path":[[13,11],[14,11],[15,11],[16,11]],"direction":"right"},{"id":"a8","path":[[9,12],[10,12],[10,11],[10,10],[11,10],[11,11],[12,11]],"direction":"right"},{"id":"a9","path":[[3,11],[3,12],[4,12],[5,12],[6,12],[7,12],[8,12],[8,11],[9,11]],"direction":"right"},{"id":"a10","path":[[2,10],[3,10],[4,10],[4,11],[5,11],[6,11],[7,11]],"direction":"right"},{"id":"a11","path":[[1,9],[1,10],[1,11],[2,11]],"direction":"right"},{"id":"a12","path":[[11,8],[11,9],[12,9],[12,10],[13,10],[14,10],[15,10],[16,10]],"direction":"right"},{"id":"a13","path":[[7,10],[8,10],[9,10]],"direction":"right"},{"id":"a14","path":[[6,9],[5,9],[5,10],[6,10]],"direction":"right"},{"id":"a15","path":[[12,17],[13,17],[14,17],[15,17],[16,17]],"direction":"right"},{"id":"a16","path":[[11,14],[12,14],[12,15],[12,16]],"direction":"down"},{"id":"a17","path":[[15,6],[15,7],[16,7],[17,7],[17,8]],"direction":"down"},{"id":"a18","path":[[13,8],[14,8]],"direction":"right"},{"id":"a19","path":[[11,15],[11,16],[10,16],[10,17],[11,17]],"direction":"right"},{"id":"a20","path":[[9,15],[9,16],[8,16],[8,17],[9,17]],"direction":"right"},{"id":"a21","path":[[9,8],[9,9]],"direction":"down"},{"id":"a22","path":[[10,3],[10,4],[10,5],[9,5],[9,6],[9,7]],"direction":"down"},{"id":"a23","path":[[7,1],[8,1],[8,2],[9,2],[9,3],[9,4]],"direction":"down"},{"id":"a24","path":[[6,1],[6,0],[7,0],[8,0],[9,0],[9,1]],"direction":"down"},{"id":"a25","path":[[8,3],[8,4],[7,4],[7,3],[7,2]],"direction":"up"},{"id":"a26","path":[[7,7],[7,6],[8,6],[8,5]],"direction":"up"},{"id":"a27","path":[[8,9],[7,9],[7,8],[8,8],[8,7]],"direction":"up"},{"id":"a28","path":[[15,14],[15,15],[16,15],[16,16]],"direction":"down"},{"id":"a29","path":[[13,15],[13,16],[14,16],[15,16]],"direction":"right"},{"id":"a30","path":[[6,15],[6,16],[7,16]],"direction":"right"},{"id":"a31","path":[[3,16],[3,17],[4,17],[5,17],[6,17],[7,17]],"direction":"right"},{"id":"a32","path":[[5,7],[6,7],[6,8]],"direction":"down"},{"id":"a33","path":[[10,14],[10,15]],"direction":"down"},{"id":"a34","path":[[0,15],[0,14],[1,14]],"direction":"right"},{"id":"a35","path":[[4,15],[3,15]],"direction":"left"},{"id":"a36","path":[[4,7],[4,6],[3,6],[3,7],[3,8],[3,9]],"direction":"down"},{"id":"a37","path":[[1,7],[1,6],[2,6],[2,5],[2,4],[3,4],[3,5]],"direction":"down"},{"id":"a38","path":[[1,1],[2,1],[3,1],[3,2],[3,3]],"direction":"down"},{"id":"a39","path":[[5,8],[4,8],[4,9]],"direction":"down"},{"id":"a40","path":[[4,1],[4,0],[5,0],[5,1],[5,2],[5,3],[5,4],[5,5],[5,6]],"direction":"down"},{"id":"a41","path":[[4,5],[4,4],[4,3],[4,2]],"direction":"up"},{"id":"a42","path":[[11,7],[10,7],[10,8],[10,9]],"direction":"down"},{"id":"a43","path":[[0,16],[0,17],[1,17],[2,17]],"direction":"right"},{"id":"a44","path":[[1,8],[0,8],[0,9],[0,10],[0,11],[0,12]],"direction":"down"},{"id":"a45","path":[[2,12],[1,12]],"direction":"left"},{"id":"a46","path":[[13,12],[12,12],[11,12]],"direction":"left"},{"id":"a47","path":[[16,12],[15,12],[14,12]],"direction":"left"},{"id":"a48","path":[[16,5],[16,6]],"direction":"down"},{"id":"a49","path":[[16,2],[16,1],[16,0],[17,0],[17,1],[17,2],[17,3],[16,3],[16,4]],"direction":"down"},{"id":"a50","path":[[17,6],[17,5],[17,4]],"direction":"up"},{"id":"a51","path":[[13,6],[13,5],[14,5],[15,5]],"direction":"right"},{"id":"a52","path":[[14,0],[14,1],[14,2],[15,2],[15,3],[15,4]],"direction":"down"},{"id":"a53","path":[[12,3],[11,3],[11,2],[12,2],[13,2]],"direction":"right"},{"id":"a54","path":[[15,0],[15,1]],"direction":"down"},{"id":"a55","path":[[13,1],[12,1],[12,0],[13,0]],"direction":"right"},{"id":"a56","path":[[14,3],[14,4],[13,4],[13,3]],"direction":"up"},{"id":"a57","path":[[13,7],[14,7],[14,6]],"direction":"up"},{"id":"a58","path":[[2,7],[2,8],[2,9]],"direction":"down"},{"id":"a59","path":[[0,3],[0,2],[1,2],[2,2],[2,3]],"direction":"down"},{"id":"a60","path":[[10,6],[11,6],[12,6]],"direction":"right"},{"id":"a61","path":[[12,5],[12,4],[11,4],[11,5]],"direction":"down"},{"id":"a62","path":[[12,8],[12,7]],"direction":"up"},{"id":"a63","path":[[1,3],[1,4],[1,5]],"direction":"down"},{"id":"a64","path":[[10,0],[11,0],[11,1],[10,1],[10,2]],"direction":"down"},{"id":"a65","path":[[0,1],[0,0],[1,0],[2,0],[3,0]],"direction":"right"},{"id":"a66","path":[[0,7],[0,6],[0,5],[0,4]],"direction":"up"},{"id":"a67","path":[[7,5],[6,5],[6,6]],"direction":"down"},{"id":"a68","path":[[6,3],[6,4]],"direction":"down"},{"id":"a69","path":[[14,9],[13,9]],"direction":"left"}],"timeLimitMs":null,"obstacles":[[6,2]]},"20:1":{"number":18,"width":20,"height":20,"seed":92018,"generatorVersion":4,"profileVersion":8,"lifeLimit":3,"arrows":[{"id":"a0","path":[[3,17],[2,17],[1,17],[0,17],[0,18],[0,19]],"direction":"down"},{"id":"a1","path":[[1,18],[2,18],[2,19],[1,19]],"direction":"left"},{"id":"a2","path":[[2,16],[3,16],[4,16],[4,17],[4,18],[3,18]],"direction":"left"},{"id":"a3","path":[[7,15],[7,16],[6,16],[6,17],[5,17]],"direction":"left"},{"id":"a4","path":[[13,15],[12,15],[12,16],[11,16],[10,16],[10,17],[9,17],[8,17],[7,17]],"direction":"left"},{"id":"a5","path":[[15,17],[14,17],[13,17],[12,17],[11,17]],"direction":"left"},{"id":"a6","path":[[17,19],[16,19],[16,18],[17,18],[17,17],[16,17]],"direction":"left"},{"id":"a7","path":[[16,16],[17,16],[17,15],[18,15],[18,16],[19,16],[19,17],[18,17]],"direction":"left"},{"id":"a8","path":[[14,15],[15,15],[15,14],[16,14],[16,15]],"direction":"down"},{"id":"a9","path":[[18,11],[17,11],[17,10],[16,10],[16,11],[16,12],[16,13]],"direction":"down"},{"id":"a10","path":[[13,9],[14,9],[15,9],[15,8],[16,8],[16,9]],"direction":"down"},{"id":"a11","path":[[18,6],[17,6],[16,6],[16,7]],"direction":"down"},{"id":"a12","path":[[16,3],[16,4],[16,5]],"direction":"down"},{"id":"a13","path":[[16,0],[16,1],[16,2]],"direction":"down"},{"id":"a14","path":[[13,16],[14,16],[15,16]],"direction":"right"},{"id":"a15","path":[[9,14],[8,14],[8,15],[8,16],[9,16]],"direction":"right"},{"id":"a16","path":[[5,19],[4,19],[3,19]],"direction":"left"},{"id":"a17","path":[[11,18],[10,18],[9,18],[8,18],[7,18],[7,19],[6,19]],"direction":"left"},{"id":"a18","path":[[6,13],[7,13],[7,14]],"direction":"down"},{"id":"a19","path":[[10,12],[9,12],[8,12],[8,11],[7,11],[7,12]],"direction":"down"},{"id":"a20","path":[[7,4],[6,4],[6,5],[6,6],[6,7],[6,8],[6,9],[7,9],[7,10]],"direction":"down"},{"id":"a21","path":[[9,8],[9,7],[9,6],[8,6],[7,6],[7,7],[7,8]],"direction":"down"},{"id":"a22","path":[[1,16],[1,15],[2,15],[3,15],[3,14],[4,14],[4,15]],"direction":"down"},{"id":"a23","path":[[6,14],[5,14],[5,13],[5,12],[4,12],[4,13]],"direction":"down"},{"id":"a24","path":[[3,7],[3,8],[4,8],[4,9],[4,10],[4,11]],"direction":"down"},{"id":"a25","path":[[2,6],[3,6],[4,6],[4,7]],"direction":"down"},{"id":"a26","path":[[1,3],[1,2],[2,2],[3,2],[3,3],[3,4],[4,4],[4,5]],"direction":"down"},{"id":"a27","path":[[4,0],[5,0],[6,0],[6,1],[5,1],[4,1],[4,2],[4,3]],"direction":"down"},{"id":"a28","path":[[6,2],[6,3],[5,3],[5,2]],"direction":"up"},{"id":"a29","path":[[5,7],[5,6],[5,5],[5,4]],"direction":"up"},{"id":"a30","path":[[6,10],[5,10],[5,9],[5,8]],"direction":"up"},{"id":"a31","path":[[18,14],[18,13],[17,13],[17,14]],"direction":"down"},{"id":"a32","path":[[14,19],[13,19],[12,19],[11,19],[10,19],[9,19],[8,19]],"direction":"left"},{"id":"a33","path":[[9,15],[10,15],[10,14],[11,14],[11,15]],"direction":"down"},{"id":"a34","path":[[9,10],[10,10],[11,10],[12,10],[12,11],[11,11],[11,12],[11,13]],"direction":"down"},{"id":"a35","path":[[9,5],[10,5],[10,6],[11,6],[11,7],[11,8],[11,9]],"direction":"down"},{"id":"a36","path":[[14,3],[14,4],[13,4],[12,4],[11,4],[11,5]],"direction":"down"},{"id":"a37","path":[[13,1],[13,2],[13,3],[12,3],[12,2],[11,2],[11,3]],"direction":"down"},{"id":"a38","path":[[11,0],[11,1]],"direction":"down"},{"id":"a39","path":[[3,12],[3,13],[2,13],[2,14]],"direction":"down"},{"id":"a40","path":[[0,14],[1,14],[1,13],[1,12],[1,11],[2,11],[2,12]],"direction":"down"},{"id":"a41","path":[[1,7],[2,7],[2,8],[2,9],[2,10]],"direction":"down"},{"id":"a42","path":[[6,18],[5,18]],"direction":"left"},{"id":"a43","path":[[6,15],[5,15],[5,16]],"direction":"down"},{"id":"a44","path":[[5,11],[6,11],[6,12]],"direction":"down"},{"id":"a45","path":[[0,15],[0,16]],"direction":"down"},{"id":"a46","path":[[0,9],[0,10],[0,11],[0,12],[0,13]],"direction":"down"},{"id":"a47","path":[[0,5],[0,6],[0,7],[0,8]],"direction":"down"},{"id":"a48","path":[[2,0],[1,0],[0,0],[0,1],[0,2],[0,3],[0,4]],"direction":"down"},{"id":"a49","path":[[10,0],[9,0],[9,1],[10,1],[10,2],[9,2],[8,2],[7,2]],"direction":"left"},{"id":"a50","path":[[9,3],[9,4],[10,4],[10,3]],"direction":"up"},{"id":"a51","path":[[8,10],[8,9],[9,9],[10,9],[10,8],[10,7]],"direction":"up"},{"id":"a52","path":[[14,18],[13,18],[12,18]],"direction":"left"},{"id":"a53","path":[[14,10],[13,10],[13,11],[13,12],[12,12],[12,13],[12,14]],"direction":"down"},{"id":"a54","path":[[13,5],[12,5],[12,6],[12,7],[12,8],[12,9]],"direction":"down"},{"id":"a55","path":[[14,2],[14,1],[15,1],[15,0],[14,0],[13,0],[12,0],[12,1]],"direction":"down"},{"id":"a56","path":[[15,4],[15,5],[15,6],[14,6],[14,5]],"direction":"up"},{"id":"a57","path":[[3,9],[3,10],[3,11]],"direction":"down"},{"id":"a58","path":[[10,11],[9,11]],"direction":"left"},{"id":"a59","path":[[14,13],[14,14]],"direction":"down"},{"id":"a60","path":[[15,10],[15,11],[14,11],[14,12]],"direction":"down"},{"id":"a61","path":[[13,13],[13,14]],"direction":"down"},{"id":"a62","path":[[10,13],[9,13],[8,13]],"direction":"left"},{"id":"a63","path":[[8,7],[8,8]],"direction":"down"},{"id":"a64","path":[[3,0],[3,1],[2,1],[1,1]],"direction":"left"},{"id":"a65","path":[[1,4],[2,4],[2,3]],"direction":"up"},{"id":"a66","path":[[7,5],[8,5],[8,4],[8,3],[7,3]],"direction":"left"},{"id":"a67","path":[[8,1],[8,0],[7,0],[7,1]],"direction":"down"},{"id":"a68","path":[[18,1],[18,0],[17,0]],"direction":"left"},{"id":"a69","path":[[19,6],[19,5],[19,4],[18,4],[17,4],[17,3],[18,3],[18,2]],"direction":"up"},{"id":"a70","path":[[17,5],[18,5]],"direction":"right"},{"id":"a71","path":[[17,7],[17,8],[18,8],[18,7]],"direction":"up"},{"id":"a72","path":[[17,2],[17,1]],"direction":"up"},{"id":"a73","path":[[1,6],[1,5]],"direction":"up"},{"id":"a74","path":[[3,5],[2,5]],"direction":"left"},{"id":"a75","path":[[1,10],[1,9],[1,8]],"direction":"up"},{"id":"a76","path":[[19,11],[19,10],[18,10],[18,9],[17,9]],"direction":"left"},{"id":"a77","path":[[13,8],[13,7],[13,6]],"direction":"up"},{"id":"a78","path":[[15,7],[14,7]],"direction":"left"},{"id":"a79","path":[[15,3],[15,2]],"direction":"up"},{"id":"a80","path":[[15,13],[15,12]],"direction":"up"},{"id":"a81","path":[[19,15],[19,14],[19,13],[19,12],[18,12],[17,12]],"direction":"left"},{"id":"a82","path":[[19,18],[19,19],[18,19],[18,18]],"direction":"up"},{"id":"a83","path":[[19,7],[19,8],[19,9]],"direction":"down"},{"id":"a84","path":[[19,0],[19,1],[19,2],[19,3]],"direction":"down"},{"id":"a85","path":[[15,19],[15,18]],"direction":"up"}],"timeLimitMs":null,"obstacles":[[14,8]]},"20:2":{"number":20,"width":20,"height":20,"seed":92020,"generatorVersion":4,"profileVersion":8,"lifeLimit":3,"arrows":[{"id":"a0","path":[[2,17],[2,18],[2,19]],"direction":"down"},{"id":"a1","path":[[1,14],[2,14],[2,15],[2,16]],"direction":"down"},{"id":"a2","path":[[1,8],[1,9],[2,9],[2,10],[2,11],[1,11],[1,12],[2,12],[2,13]],"direction":"down"},{"id":"a3","path":[[3,7],[2,7],[2,8]],"direction":"down"},{"id":"a4","path":[[5,5],[4,5],[3,5],[2,5],[2,6]],"direction":"down"},{"id":"a5","path":[[2,2],[2,3],[2,4]],"direction":"down"},{"id":"a6","path":[[0,0],[1,0],[2,0],[2,1]],"direction":"down"},{"id":"a7","path":[[1,5],[1,4],[1,3],[1,2],[0,2],[0,1]],"direction":"up"},{"id":"a8","path":[[3,3],[3,4],[4,4],[4,3],[4,2],[3,2]],"direction":"left"},{"id":"a9","path":[[7,2],[6,2],[5,2]],"direction":"left"},{"id":"a10","path":[[12,2],[12,3],[11,3],[11,2],[10,2],[9,2],[8,2]],"direction":"left"},{"id":"a11","path":[[14,5],[14,4],[13,4],[13,3],[14,3],[14,2],[13,2]],"direction":"left"},{"id":"a12","path":[[18,1],[18,2],[17,2],[16,2],[15,2]],"direction":"left"},{"id":"a13","path":[[0,5],[0,4],[0,3]],"direction":"up"},{"id":"a14","path":[[6,6],[6,5],[6,4],[5,4]],"direction":"left"},{"id":"a15","path":[[8,3],[8,4],[8,5],[7,5]],"direction":"left"},{"id":"a16","path":[[12,4],[12,5],[11,5],[10,5],[9,5]],"direction":"left"},{"id":"a17","path":[[7,4],[7,3],[6,3],[5,3]],"direction":"left"},{"id":"a18","path":[[11,4],[10,4],[9,4]],"direction":"left"},{"id":"a19","path":[[15,5],[16,5],[16,4],[15,4]],"direction":"left"},{"id":"a20","path":[[18,6],[18,5],[18,4],[17,4]],"direction":"left"},{"id":"a21","path":[[10,3],[9,3]],"direction":"left"},{"id":"a22","path":[[19,0],[19,1],[19,2],[19,3],[18,3],[17,3],[16,3],[15,3]],"direction":"left"},{"id":"a23","path":[[14,0],[15,0],[16,0],[16,1],[17,1]],"direction":"right"},{"id":"a24","path":[[16,12],[16,11],[16,10],[16,9],[16,8],[16,7],[16,6]],"direction":"up"},{"id":"a25","path":[[14,13],[14,14],[14,15],[15,15],[16,15],[16,14],[16,13]],"direction":"up"},{"id":"a26","path":[[17,19],[16,19],[15,19],[15,18],[16,18],[16,17],[16,16]],"direction":"up"},{"id":"a27","path":[[13,14],[13,15],[13,16],[14,16],[15,16],[15,17]],"direction":"down"},{"id":"a28","path":[[14,11],[14,12],[15,12],[15,13],[15,14]],"direction":"down"},{"id":"a29","path":[[14,10],[15,10],[15,11]],"direction":"down"},{"id":"a30","path":[[18,11],[18,10],[18,9],[19,9],[19,8],[19,7],[19,6],[19,5],[19,4]],"direction":"up"},{"id":"a31","path":[[18,8],[17,8],[17,7],[18,7]],"direction":"right"},{"id":"a32","path":[[14,7],[15,7]],"direction":"right"},{"id":"a33","path":[[10,8],[11,8],[11,7],[11,6],[12,6],[12,7],[13,7]],"direction":"right"},{"id":"a34","path":[[10,6],[9,6],[9,7],[10,7]],"direction":"right"},{"id":"a35","path":[[5,6],[5,7],[6,7],[7,7],[8,7]],"direction":"right"},{"id":"a36","path":[[17,13],[17,14],[18,14],[19,14],[19,13],[19,12],[19,11],[19,10]],"direction":"up"},{"id":"a37","path":[[11,16],[10,16],[9,16],[9,15],[10,15],[11,15],[11,14],[12,14]],"direction":"right"},{"id":"a38","path":[[9,11],[9,12],[9,13],[9,14],[10,14]],"direction":"right"},{"id":"a39","path":[[6,16],[7,16],[7,15],[7,14],[8,14]],"direction":"right"},{"id":"a40","path":[[3,14],[3,13],[4,13],[5,13],[5,14],[6,14]],"direction":"right"},{"id":"a41","path":[[19,17],[18,17],[18,16],[17,16],[17,17],[17,18]],"direction":"down"},{"id":"a42","path":[[12,15],[12,16],[12,17],[13,17],[14,17]],"direction":"right"},{"id":"a43","path":[[10,19],[11,19],[12,19],[12,18],[11,18],[10,18],[10,17],[11,17]],"direction":"right"},{"id":"a44","path":[[13,10],[13,11],[12,11],[11,11],[11,12],[10,12],[10,13]],"direction":"down"},{"id":"a45","path":[[11,10],[12,10],[12,9],[11,9],[10,9],[10,10],[10,11]],"direction":"down"},{"id":"a46","path":[[13,1],[12,1],[11,1],[11,0],[10,0],[10,1]],"direction":"down"},{"id":"a47","path":[[14,8],[15,8]],"direction":"right"},{"id":"a48","path":[[12,8],[13,8]],"direction":"right"},{"id":"a49","path":[[8,10],[9,10],[9,9],[8,9],[8,8],[9,8]],"direction":"right"},{"id":"a50","path":[[5,10],[6,10],[6,9],[6,8],[7,8]],"direction":"right"},{"id":"a51","path":[[6,11],[5,11],[4,11],[3,11],[3,10],[3,9],[3,8],[4,8],[5,8]],"direction":"right"},{"id":"a52","path":[[17,0],[18,0]],"direction":"right"},{"id":"a53","path":[[12,0],[13,0]],"direction":"right"},{"id":"a54","path":[[15,6],[14,6],[13,6],[13,5]],"direction":"up"},{"id":"a55","path":[[19,16],[19,15]],"direction":"up"},{"id":"a56","path":[[17,15],[18,15]],"direction":"right"},{"id":"a57","path":[[17,9],[17,10],[17,11],[17,12]],"direction":"down"},{"id":"a58","path":[[17,5],[17,6]],"direction":"down"},{"id":"a59","path":[[7,6],[8,6]],"direction":"right"},{"id":"a60","path":[[9,1],[8,1],[8,0],[9,0]],"direction":"right"},{"id":"a61","path":[[7,1],[6,1],[6,0],[7,0]],"direction":"right"},{"id":"a62","path":[[4,0],[5,0]],"direction":"right"},{"id":"a63","path":[[18,13],[18,12]],"direction":"up"},{"id":"a64","path":[[12,12],[13,12]],"direction":"right"},{"id":"a65","path":[[7,12],[8,12]],"direction":"right"},{"id":"a66","path":[[3,12],[4,12],[5,12],[6,12]],"direction":"right"},{"id":"a67","path":[[18,18],[18,19],[19,19],[19,18]],"direction":"up"},{"id":"a68","path":[[14,19],[13,19],[13,18],[14,18]],"direction":"right"},{"id":"a69","path":[[6,18],[7,18],[8,18],[8,19],[9,19]],"direction":"right"},{"id":"a70","path":[[8,15],[8,16],[8,17]],"direction":"down"},{"id":"a71","path":[[5,19],[4,19],[3,19],[3,18],[3,17],[3,16],[4,16],[5,16]],"direction":"right"},{"id":"a72","path":[[5,17],[5,18]],"direction":"down"},{"id":"a73","path":[[6,19],[7,19]],"direction":"right"},{"id":"a74","path":[[1,15],[1,16],[0,16],[0,17],[1,17],[1,18],[0,18],[0,19],[1,19]],"direction":"right"},{"id":"a75","path":[[0,14],[0,15]],"direction":"down"},{"id":"a76","path":[[4,14],[4,15],[3,15]],"direction":"left"},{"id":"a77","path":[[6,15],[5,15]],"direction":"left"},{"id":"a78","path":[[4,17],[4,18]],"direction":"down"},{"id":"a79","path":[[5,9],[4,9],[4,10]],"direction":"down"},{"id":"a80","path":[[3,6],[4,6],[4,7]],"direction":"down"},{"id":"a81","path":[[0,6],[1,6]],"direction":"right"},{"id":"a82","path":[[14,1],[15,1]],"direction":"right"},{"id":"a83","path":[[3,0],[3,1],[4,1],[5,1]],"direction":"right"},{"id":"a84","path":[[0,9],[0,8],[0,7],[1,7]],"direction":"right"},{"id":"a85","path":[[8,11],[7,11],[7,10],[7,9]],"direction":"up"},{"id":"a86","path":[[1,13],[0,13],[0,12],[0,11],[0,10],[1,10]],"direction":"right"},{"id":"a87","path":[[8,13],[7,13],[6,13]],"direction":"left"},{"id":"a88","path":[[13,13],[12,13],[11,13]],"direction":"left"},{"id":"a89","path":[[9,18],[9,17]],"direction":"up"},{"id":"a90","path":[[6,17],[7,17]],"direction":"right"},{"id":"a91","path":[[14,9],[13,9]],"direction":"left"}],"timeLimitMs":180000,"obstacles":[[1,1],[15,9]]},"20:3":{"number":25,"width":20,"height":20,"seed":92025,"generatorVersion":4,"profileVersion":8,"lifeLimit":3,"arrows":[{"id":"a0","path":[[19,5],[19,4],[19,3],[19,2],[19,1],[18,1],[18,0],[19,0]],"direction":"right"},{"id":"a1","path":[[16,1],[16,2],[16,3],[17,3],[18,3]],"direction":"right"},{"id":"a2","path":[[14,7],[14,6],[14,5],[14,4],[14,3],[15,3]],"direction":"right"},{"id":"a3","path":[[10,0],[11,0],[11,1],[11,2],[11,3],[12,3],[13,3]],"direction":"right"},{"id":"a4","path":[[12,5],[11,5],[11,4],[10,4],[10,3],[10,2],[10,1]],"direction":"up"},{"id":"a5","path":[[9,8],[9,7],[10,7],[11,7],[11,6]],"direction":"up"},{"id":"a6","path":[[11,9],[11,8]],"direction":"up"},{"id":"a7","path":[[14,11],[13,11],[13,10],[12,10],[12,11],[11,11],[11,10]],"direction":"up"},{"id":"a8","path":[[9,12],[10,12],[10,13],[11,13],[11,12]],"direction":"up"},{"id":"a9","path":[[8,18],[9,18],[9,17],[10,17],[11,17],[11,16],[11,15],[11,14]],"direction":"up"},{"id":"a10","path":[[14,1],[15,1],[15,0],[16,0],[17,0],[17,1],[17,2],[18,2]],"direction":"right"},{"id":"a11","path":[[17,4],[17,5],[17,6],[16,6],[16,5],[16,4]],"direction":"up"},{"id":"a12","path":[[15,9],[14,9],[14,8],[15,8],[16,8],[16,7]],"direction":"up"},{"id":"a13","path":[[19,12],[19,11],[19,10],[18,10],[18,11],[17,11],[17,10],[16,10],[16,9]],"direction":"up"},{"id":"a14","path":[[14,10],[15,10]],"direction":"right"},{"id":"a15","path":[[6,6],[7,6],[7,7],[8,7],[8,8],[8,9],[8,10],[9,10],[10,10]],"direction":"right"},{"id":"a16","path":[[6,12],[6,11],[6,10],[7,10]],"direction":"right"},{"id":"a17","path":[[5,11],[5,12],[5,13],[4,13],[4,12],[4,11],[4,10],[5,10]],"direction":"right"},{"id":"a18","path":[[0,8],[0,9],[0,10],[0,11],[1,11],[1,10],[2,10],[3,10]],"direction":"right"},{"id":"a19","path":[[2,8],[1,8]],"direction":"left"},{"id":"a20","path":[[5,8],[4,8],[3,8]],"direction":"left"},{"id":"a21","path":[[1,9],[2,9],[3,9],[4,9],[5,9],[6,9],[7,9],[7,8],[6,8]],"direction":"left"},{"id":"a22","path":[[10,8],[10,9],[9,9]],"direction":"left"},{"id":"a23","path":[[13,5],[13,6],[13,7],[13,8],[13,9],[12,9]],"direction":"left"},{"id":"a24","path":[[18,7],[17,7],[17,8],[18,8],[19,8],[19,9],[18,9],[17,9]],"direction":"left"},{"id":"a25","path":[[17,13],[17,12]],"direction":"up"},{"id":"a26","path":[[15,13],[15,14],[16,14],[16,15],[16,16],[17,16],[17,15],[17,14]],"direction":"up"},{"id":"a27","path":[[19,16],[18,16],[18,17],[18,18],[17,18],[17,17]],"direction":"up"},{"id":"a28","path":[[14,14],[13,14],[13,15],[13,16],[14,16],[15,16]],"direction":"right"},{"id":"a29","path":[[8,5],[8,4],[8,3],[9,3]],"direction":"right"},{"id":"a30","path":[[4,3],[5,3],[6,3],[7,3]],"direction":"right"},{"id":"a31","path":[[2,1],[2,2],[2,3],[3,3]],"direction":"right"},{"id":"a32","path":[[0,1],[0,0],[1,0],[1,1],[1,2],[0,2],[0,3],[1,3]],"direction":"right"},{"id":"a33","path":[[4,1],[3,1]],"direction":"left"},{"id":"a34","path":[[7,0],[8,0],[8,1],[7,1],[6,1],[5,1]],"direction":"left"},{"id":"a35","path":[[14,0],[13,0],[13,1],[13,2],[14,2],[15,2]],"direction":"right"},{"id":"a36","path":[[15,7],[15,6],[15,5],[15,4]],"direction":"up"},{"id":"a37","path":[[15,12],[15,11]],"direction":"up"},{"id":"a38","path":[[13,12],[13,13],[14,13],[14,12]],"direction":"up"},{"id":"a39","path":[[16,13],[16,12],[16,11]],"direction":"up"},{"id":"a40","path":[[19,19],[18,19],[17,19],[16,19],[16,18],[16,17]],"direction":"up"},{"id":"a41","path":[[18,14],[18,15]],"direction":"down"},{"id":"a42","path":[[18,12],[18,13]],"direction":"down"},{"id":"a43","path":[[18,4],[18,5],[18,6]],"direction":"down"},{"id":"a44","path":[[12,4],[13,4]],"direction":"right"},{"id":"a45","path":[[14,18],[13,18],[13,17]],"direction":"up"},{"id":"a46","path":[[19,7],[19,6]],"direction":"up"},{"id":"a47","path":[[19,15],[19,14],[19,13]],"direction":"up"},{"id":"a48","path":[[14,15],[15,15]],"direction":"right"},{"id":"a49","path":[[9,13],[8,13],[8,12],[8,11],[9,11],[10,11]],"direction":"right"},{"id":"a50","path":[[3,12],[3,11],[2,11]],"direction":"left"},{"id":"a51","path":[[0,4],[0,5],[0,6],[1,6],[1,5],[1,4]],"direction":"up"},{"id":"a52","path":[[3,5],[3,6],[2,6]],"direction":"left"},{"id":"a53","path":[[5,6],[4,6]],"direction":"left"},{"id":"a54","path":[[9,4],[9,5],[9,6],[8,6]],"direction":"left"},{"id":"a55","path":[[5,5],[4,5],[4,4],[5,4],[6,4],[7,4]],"direction":"right"},{"id":"a56","path":[[2,4],[3,4]],"direction":"right"},{"id":"a57","path":[[6,0],[5,0],[4,0],[3,0],[2,0]],"direction":"left"},{"id":"a58","path":[[19,18],[19,17]],"direction":"up"},{"id":"a59","path":[[14,17],[15,17]],"direction":"right"},{"id":"a60","path":[[13,19],[14,19],[15,19],[15,18]],"direction":"up"},{"id":"a61","path":[[11,19],[12,19]],"direction":"right"},{"id":"a62","path":[[12,16],[12,17],[12,18]],"direction":"down"},{"id":"a63","path":[[7,15],[8,15],[8,16],[9,16],[10,16]],"direction":"right"},{"id":"a64","path":[[6,14],[5,14],[4,14],[4,15],[5,15],[6,15],[6,16],[7,16]],"direction":"right"},{"id":"a65","path":[[3,17],[3,16],[4,16],[5,16]],"direction":"right"},{"id":"a66","path":[[2,18],[2,17],[1,17],[1,16],[2,16]],"direction":"right"},{"id":"a67","path":[[10,6],[10,5]],"direction":"up"},{"id":"a68","path":[[9,14],[9,15],[10,15],[10,14]],"direction":"up"},{"id":"a69","path":[[6,18],[6,19],[7,19],[8,19],[9,19],[10,19],[10,18]],"direction":"up"},{"id":"a70","path":[[8,17],[7,17],[7,18]],"direction":"down"},{"id":"a71","path":[[5,19],[5,18],[4,18],[4,17],[5,17],[6,17]],"direction":"right"},{"id":"a72","path":[[0,19],[1,19],[2,19],[3,19],[4,19]],"direction":"right"},{"id":"a73","path":[[3,15],[3,14],[2,14],[2,15]],"direction":"down"},{"id":"a74","path":[[6,5],[7,5]],"direction":"right"},{"id":"a75","path":[[9,0],[9,1],[9,2]],"direction":"down"},{"id":"a76","path":[[12,12],[12,13],[12,14],[12,15]],"direction":"down"},{"id":"a77","path":[[6,13],[7,13],[7,14],[8,14]],"direction":"right"},{"id":"a78","path":[[0,14],[1,14],[1,13],[1,12],[2,12],[2,13],[3,13]],"direction":"right"},{"id":"a79","path":[[12,6],[12,7],[12,8]],"direction":"down"},{"id":"a80","path":[[12,0],[12,1],[12,2]],"direction":"down"},{"id":"a81","path":[[5,2],[6,2],[7,2],[8,2]],"direction":"right"},{"id":"a82","path":[[3,2],[4,2]],"direction":"right"},{"id":"a83","path":[[0,7],[1,7],[2,7],[3,7],[4,7],[5,7],[6,7]],"direction":"right"},{"id":"a84","path":[[0,13],[0,12]],"direction":"up"},{"id":"a85","path":[[7,12],[7,11]],"direction":"up"},{"id":"a86","path":[[1,18],[0,18],[0,17],[0,16],[0,15],[1,15]],"direction":"right"}],"timeLimitMs":170000,"obstacles":[[2,5],[11,18],[3,18]]},"20:4":{"number":30,"width":20,"height":20,"seed":92030,"generatorVersion":4,"profileVersion":8,"lifeLimit":3,"arrows":[{"id":"a0","path":[[3,18],[2,18],[2,19],[1,19],[0,19]],"direction":"left"},{"id":"a1","path":[[4,15],[3,15],[2,15],[2,16],[2,17]],"direction":"down"},{"id":"a2","path":[[3,14],[3,13],[2,13],[2,14]],"direction":"down"},{"id":"a3","path":[[5,9],[4,9],[4,10],[4,11],[3,11],[2,11],[2,12]],"direction":"down"},{"id":"a4","path":[[1,11],[1,10],[1,9],[2,9],[2,10]],"direction":"down"},{"id":"a5","path":[[2,5],[1,5],[0,5],[0,6],[0,7],[1,7],[2,7],[2,8]],"direction":"down"},{"id":"a6","path":[[6,8],[5,8],[4,8],[4,7],[3,7]],"direction":"left"},{"id":"a7","path":[[6,6],[6,7],[5,7]],"direction":"left"},{"id":"a8","path":[[8,5],[7,5],[7,6],[8,6],[8,7],[7,7]],"direction":"left"},{"id":"a9","path":[[13,10],[12,10],[11,10],[10,10],[10,9],[10,8],[10,7],[9,7]],"direction":"left"},{"id":"a10","path":[[13,8],[13,9],[12,9],[11,9],[11,8],[12,8],[12,7],[11,7]],"direction":"left"},{"id":"a11","path":[[16,8],[17,8],[17,7],[16,7],[15,7],[14,7],[13,7]],"direction":"left"},{"id":"a12","path":[[19,3],[19,4],[19,5],[19,6],[19,7],[18,7]],"direction":"left"},{"id":"a13","path":[[15,5],[16,5],[17,5],[18,5]],"direction":"right"},{"id":"a14","path":[[12,6],[13,6],[13,5],[14,5]],"direction":"right"},{"id":"a15","path":[[10,5],[10,6],[11,6],[11,5],[12,5]],"direction":"right"},{"id":"a16","path":[[17,2],[17,3],[17,4],[18,4]],"direction":"right"},{"id":"a17","path":[[15,3],[15,4],[16,4]],"direction":"right"},{"id":"a18","path":[[4,5],[4,6],[3,6],[2,6],[1,6]],"direction":"left"},{"id":"a19","path":[[1,4],[0,4],[0,3],[1,3],[2,3],[2,4]],"direction":"down"},{"id":"a20","path":[[0,0],[1,0],[2,0],[3,0],[4,0],[4,1],[4,2],[4,3],[3,3]],"direction":"left"},{"id":"a21","path":[[1,2],[2,2],[3,2],[3,1]],"direction":"up"},{"id":"a22","path":[[3,5],[3,4]],"direction":"up"},{"id":"a23","path":[[3,10],[3,9],[3,8]],"direction":"up"},{"id":"a24","path":[[0,2],[0,1]],"direction":"up"},{"id":"a25","path":[[2,1],[1,1]],"direction":"left"},{"id":"a26","path":[[9,2],[8,2],[7,2],[7,1],[6,1],[5,1]],"direction":"left"},{"id":"a27","path":[[11,2],[10,2],[10,1],[10,0],[9,0],[9,1],[8,1]],"direction":"left"},{"id":"a28","path":[[10,3],[11,3],[12,3],[13,3],[13,2],[13,1],[12,1],[11,1]],"direction":"left"},{"id":"a29","path":[[16,1],[15,1],[14,1]],"direction":"left"},{"id":"a30","path":[[18,3],[18,2],[18,1],[17,1]],"direction":"left"},{"id":"a31","path":[[6,4],[6,3],[5,3]],"direction":"left"},{"id":"a32","path":[[7,4],[8,4],[9,4],[9,3],[8,3],[7,3]],"direction":"left"},{"id":"a33","path":[[9,6],[9,5]],"direction":"up"},{"id":"a34","path":[[8,11],[8,10],[8,9],[9,9],[9,8]],"direction":"up"},{"id":"a35","path":[[10,11],[9,11],[9,10]],"direction":"up"},{"id":"a36","path":[[10,14],[10,13],[9,13],[9,12]],"direction":"up"},{"id":"a37","path":[[11,17],[10,17],[9,17],[9,16],[9,15],[9,14]],"direction":"up"},{"id":"a38","path":[[13,18],[13,19],[12,19],[11,19],[10,19],[9,19],[9,18]],"direction":"up"},{"id":"a39","path":[[12,15],[13,15],[13,16],[13,17]],"direction":"down"},{"id":"a40","path":[[12,12],[13,12],[13,13],[13,14]],"direction":"down"},{"id":"a41","path":[[1,17],[1,18]],"direction":"down"},{"id":"a42","path":[[0,15],[0,14],[1,14],[1,15],[1,16]],"direction":"down"},{"id":"a43","path":[[7,13],[7,14],[8,14],[8,15],[8,16],[7,16],[7,15],[6,15],[5,15]],"direction":"left"},{"id":"a44","path":[[11,15],[10,15]],"direction":"left"},{"id":"a45","path":[[14,17],[14,16],[15,16],[15,15],[14,15]],"direction":"left"},{"id":"a46","path":[[18,17],[17,17],[17,16],[17,15],[16,15]],"direction":"left"},{"id":"a47","path":[[17,12],[17,13],[18,13],[19,13],[19,14],[19,15],[18,15]],"direction":"left"},{"id":"a48","path":[[16,9],[16,10],[16,11],[16,12],[15,12],[15,13],[16,13]],"direction":"right"},{"id":"a49","path":[[5,4],[4,4]],"direction":"left"},{"id":"a50","path":[[12,4],[11,4],[10,4]],"direction":"left"},{"id":"a51","path":[[6,2],[5,2]],"direction":"left"},{"id":"a52","path":[[14,11],[14,12],[14,13],[14,14],[15,14],[16,14],[17,14],[18,14]],"direction":"right"},{"id":"a53","path":[[10,12],[11,12],[11,13],[12,13]],"direction":"right"},{"id":"a54","path":[[11,14],[12,14]],"direction":"right"},{"id":"a55","path":[[3,12],[4,12],[4,13],[4,14],[5,14],[6,14]],"direction":"right"},{"id":"a56","path":[[3,16],[3,17],[4,17],[4,16]],"direction":"up"},{"id":"a57","path":[[0,13],[0,12],[1,12],[1,13]],"direction":"down"},{"id":"a58","path":[[5,10],[5,11],[5,12],[6,12],[6,13],[5,13]],"direction":"left"},{"id":"a59","path":[[8,13],[8,12],[7,12]],"direction":"left"},{"id":"a60","path":[[18,10],[18,11],[19,11],[19,12],[18,12]],"direction":"left"},{"id":"a61","path":[[0,16],[0,17],[0,18]],"direction":"down"},{"id":"a62","path":[[1,8],[0,8],[0,9],[0,10],[0,11]],"direction":"down"},{"id":"a63","path":[[6,11],[7,11],[7,10],[7,9],[6,9]],"direction":"left"},{"id":"a64","path":[[13,11],[12,11],[11,11]],"direction":"left"},{"id":"a65","path":[[4,18],[4,19],[3,19]],"direction":"left"},{"id":"a66","path":[[5,17],[6,17],[7,17],[7,18],[7,19],[6,19],[5,19]],"direction":"left"},{"id":"a67","path":[[8,8],[7,8]],"direction":"left"},{"id":"a68","path":[[14,10],[14,9],[15,9],[15,8],[14,8]],"direction":"left"},{"id":"a69","path":[[19,10],[19,9],[19,8],[18,8],[18,9],[17,9]],"direction":"left"},{"id":"a70","path":[[8,0],[7,0],[6,0],[5,0]],"direction":"left"},{"id":"a71","path":[[17,0],[16,0],[15,0],[14,0],[13,0],[12,0],[11,0]],"direction":"left"},{"id":"a72","path":[[19,2],[19,1],[19,0],[18,0]],"direction":"left"},{"id":"a73","path":[[6,18],[5,18]],"direction":"left"},{"id":"a74","path":[[8,19],[8,18],[8,17]],"direction":"up"},{"id":"a75","path":[[11,18],[10,18]],"direction":"left"},{"id":"a76","path":[[16,19],[15,19],[14,19]],"direction":"left"},{"id":"a77","path":[[18,18],[18,19],[17,19]],"direction":"left"},{"id":"a78","path":[[5,6],[5,5],[6,5]],"direction":"right"},{"id":"a79","path":[[18,6],[17,6],[16,6],[15,6],[14,6]],"direction":"left"},{"id":"a80","path":[[17,11],[17,10]],"direction":"up"},{"id":"a81","path":[[14,4],[14,3],[14,2]],"direction":"up"},{"id":"a82","path":[[6,16],[5,16]],"direction":"left"},{"id":"a83","path":[[12,17],[12,16],[11,16],[10,16]],"direction":"left"},{"id":"a84","path":[[16,16],[16,17],[15,17]],"direction":"left"},{"id":"a85","path":[[19,19],[19,18],[19,17],[19,16],[18,16]],"direction":"left"},{"id":"a86","path":[[14,18],[15,18],[16,18],[17,18]],"direction":"right"},{"id":"a87","path":[[15,10],[15,11]],"direction":"down"},{"id":"a88","path":[[15,2],[16,2],[16,3]],"direction":"down"}],"timeLimitMs":160000,"obstacles":[[13,4],[12,2],[6,10],[12,18]]}};
 
 },
+"src/persistence/store.js":function(module,exports,require){
+'use strict';
+const { clone, validateLevel } = require("src/domain/board.js");
+const { Session } = require("src/domain/session.js");
+const { lifeLimit } = require("src/config.js");
+const { solve } = require("src/generation/validate.js");
+const KEY = 'arrow-garden.save.v1', BACKUP = KEY + '.backup';
+function checksum(value) { let n = 2166136261; for (let i = 0; i < value.length; i++) {
+    n ^= value.charCodeAt(i);
+    n = Math.imul(n, 16777619);
+} return (n >>> 0).toString(16); }
+function snapshot(app) {
+    if (app.mode === 'challenge' && app.campaignSnapshot) return { ...clone(app.campaignSnapshot), settings: { ...app.settings } };
+    let session = null;
+    if (app.session) {
+        const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
+        session = { level: clone(s.level), removed, lives: s.lives, state: s.state === 'failed' ? 'failed' : removed.length === s.level.arrows.length ? 'won' : 'playing' };
+        session.remainingMs = s.remainingMs;
+        session.failureReason = s.failureReason;
+        session.items = { ...s.items };
+        session.restartLevel = clone(s.restartLevel);
+    }
+    return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, session };
+}
+function validProgress(p) { return Number.isInteger(p) && p >= 1 && p < 1000000; }
+function validate(data) {
+    if (!data || data.version !== 1 || !validProgress(data.currentLevel) || !validProgress(data.unlocked) || typeof data.tutorialDone !== 'boolean' || typeof data.lifeIntroDone !== 'boolean' || typeof data.settings?.sound !== 'boolean' || typeof data.settings?.vibration !== 'boolean')
+        return false;
+    if (data.session === null)
+        return true;
+    const s = data.session;
+    const items = s?.items || { time: 1, life: 1, shuffle: 1 };
+    if (!['time', 'life', 'shuffle'].every(k => items[k] === 0 || items[k] === 1)) return false;
+    if (s?.restartLevel && (!validateLevel(s.restartLevel).valid || !solve(s.restartLevel).valid || s.restartLevel.number !== data.currentLevel)) return false;
+    if (!s || !validateLevel(s.level).valid || !solve(s.level).valid || !validProgress(s.level.number) || s.level.number !== data.currentLevel || !Array.isArray(s.removed) || new Set(s.removed).size !== s.removed.length)
+        return false;
+    const ids = new Set(s.level.arrows.map(a => a.id));
+    if (s.removed.some(id => !ids.has(id)))
+        return false;
+    if (s.level.lifeLimit === null ? s.lives !== null : !Number.isInteger(s.lives) || s.lives < 0 || s.lives > s.level.lifeLimit + 1 - items.life)
+        return false;
+    if (!['playing', 'won', 'failed'].includes(s.state))
+        return false;
+    if (s.level.timeLimitMs != null && (!Number.isFinite(s.remainingMs) || s.remainingMs < 0 || s.remainingMs > s.level.timeLimitMs + (1 - items.time) * 30000)) return false;
+    if (s.state === 'failed')
+        return s.lives === 0 || s.failureReason === 'timeout' && s.level.timeLimitMs != null && s.remainingMs === 0;
+    if (s.level.timeLimitMs != null && s.remainingMs === 0) return false;
+    if (s.lives === 0)
+        return false;
+    return (s.state === 'won') === (s.removed.length === ids.size);
+}
+function encode(data) { const payload = JSON.stringify(data); return JSON.stringify({ payload, checksum: checksum(payload) }); }
+function decode(raw) { try {
+    const envelope = JSON.parse(raw);
+    if (typeof envelope.payload !== 'string' || checksum(envelope.payload) !== envelope.checksum)
+        return null;
+    const data = JSON.parse(envelope.payload);
+    return validate(data) ? data : null;
+}
+catch {
+    return null;
+} }
+function recoverOriginal(raw) {
+    try {
+        const envelope = JSON.parse(raw), data = JSON.parse(envelope.payload), level = data.session?.level;
+        if (!validateLevel(level).valid || !solve(level).valid || !validProgress(level.number))
+            return null;
+        return { version: 1, currentLevel: level.number, unlocked: level.number, settings: { sound: true, vibration: true }, tutorialDone: level.number > 1, lifeIntroDone: false, session: { level, removed: [], lives: level.lifeLimit, remainingMs: level.timeLimitMs ?? null, state: 'playing' } };
+    }
+    catch {
+        return null;
+    }
+}
+function createStore(storage) {
+    return { load() {
+            const raw = storage.get(KEY), backup = storage.get(BACKUP);
+            if (!raw && !backup)
+                return { data: null, recovered: false };
+            const current = decode(raw);
+            if (current)
+                return { data: current, recovered: false };
+            const previous = decode(backup);
+            if (previous)
+                return { data: previous, recovered: true };
+            return { data: recoverOriginal(raw) || recoverOriginal(backup), recovered: true };
+        }, save(data) { if (!validate(data))
+            throw new Error('Refusing invalid snapshot'); const value = encode(data); storage.set(KEY, value); storage.set(BACKUP, value); return true; } };
+}
+function restore(app, data) {
+    if (!validate(data))
+        throw new Error('Invalid saved game');
+    for (const key of ['currentLevel', 'unlocked', 'tutorialDone', 'lifeIntroDone'])
+        app[key] = data[key];
+    app.settings = { ...data.settings };
+    app.challengeUnlockSeen = !!data.challengeUnlockSeen;
+    app.session = null;
+    if (data.session) {
+        const state = data.session;
+        app.session = new Session(state.level);
+        app.session.removed = new Set(state.removed);
+        app.session.lives = state.lives;
+        if (state.level.lifeLimit === null && lifeLimit(state.level.number) !== null) {
+            app.session.level.lifeLimit = lifeLimit(state.level.number);
+            app.session.lives = app.session.level.lifeLimit;
+        }
+        app.session.state = state.state;
+        app.session.remainingMs = state.remainingMs ?? state.level.timeLimitMs ?? null;
+        app.session.failureReason = state.failureReason || (state.state === 'failed' ? 'lives' : null);
+        app.session.items = { ...(state.items || { time: 1, life: 1, shuffle: 1 }) };
+        app.session.restartLevel = state.restartLevel ? clone(state.restartLevel) : null;
+        app.tutorialStep = state.level.number === 1 && !app.tutorialDone ? 1 : 0;
+    }
+    app.screen = 'home';
+    app.modal = app.unlocked >= 20 && !app.challengeUnlockSeen ? 'rush-unlocked' : null;
+}
+function bindPersistence(app, storage) {
+    const store = createStore(storage);
+    let readBlocked = false;
+    app.persist = () => { if (readBlocked) {
+        app.savedError = true;
+        return;
+    } try {
+        store.save(snapshot(app));
+        app.savedError = false;
+    }
+    catch {
+        app.savedError = true;
+    } app.dirty = true; };
+    function read() { try {
+        const loaded = store.load();
+        if (loaded.data)
+            restore(app, loaded.data);
+        readBlocked = false;
+        app.retryRead = null;
+        app.savedError = false;
+        if (loaded.recovered) {
+            app.recoveryNotice = '存档异常，已恢复可用进度';
+            app.say(app.recoveryNotice, 5000);
+        }
+    }
+    catch {
+        readBlocked = true;
+        app.savedError = true;
+        app.recoveryNotice = '暂时无法读取进度，请重试';
+        app.retryRead = read;
+    } app.dirty = true; }
+    read();
+    app.onChange = app.persist;
+    return store;
+}
+module.exports = { KEY, BACKUP, checksum, encode, decode, validate, snapshot, restore, createStore, bindPersistence };
+
+},
+"src/generation/reshuffle.js":function(module,exports,require){
+'use strict';
+const { clone } = require("src/domain/board.js");
+const { solve } = require("src/generation/validate.js");
+async function reshuffle(session, generate, seed) {
+    const count = session.remaining, original = session.level;
+    for (let i = 0; i < 8; i++) {
+        try {
+            const result = await generate(original.number, (seed + i) >>> 0);
+            if (result.level.width !== original.width || result.level.height !== original.height || (result.level.obstacles || []).length !== (original.obstacles || []).length || result.level.arrows.length < count) continue;
+            const solved = solve(result.level);
+            if (!solved.valid) continue;
+            const keep = new Set(solved.sequence.slice(-count));
+            const level = { ...clone(result.level), lifeLimit: original.lifeLimit, timeLimitMs: original.timeLimitMs, initialArrowCount: original.initialArrowCount || original.arrows.length };
+            level.arrows = level.arrows.filter(a => keep.has(a.id));
+            if (level.arrows.length === count && solve(level).valid) return level;
+        } catch { }
+    }
+    // Rotation is an exact solvability-preserving fallback, including for old saved layouts.
+    const level = clone(original), rotate = p => [original.width - 1 - p[0], original.height - 1 - p[1]];
+    const opposite = { up: 'down', down: 'up', left: 'right', right: 'left' };
+    level.arrows = original.arrows.filter(a => !session.removed.has(a.id)).map(a => ({ ...clone(a), direction: opposite[a.direction], path: a.path.map(rotate) }));
+    level.obstacles = (original.obstacles || []).map(rotate);
+    level.initialArrowCount = original.initialArrowCount || original.arrows.length;
+    if (!solve(level).valid || level.arrows.length !== count) throw Error('Cannot reshuffle safely');
+    return level;
+}
+module.exports = { reshuffle };
+
+},
 "src/ui/view.js":function(module,exports,require){
 'use strict';
 const { drawBoard } = require("src/rendering/board.js");
@@ -8510,8 +8748,9 @@ class View {
         drawBoard(c, fixtures.tutorial, { x, y, width: size, height: size });
         const by = Math.min(l.bottom - 123, Math.max(y + size + 36, l.top + usable * .73));
         text(c, '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关 · ' + CONFIG.profiles[profileIndex(app.currentLevel)].name, w / 2, by - 24, 13, COLORS.muted, 'center');
-        this.button('start', app.session ? '继续游戏' : '开始游戏', 32, by, w - 64, 54, true);
         const secondaryWidth = (w - 76) / 2;
+        this.button('start', app.session ? '继续闯关' : '开始闯关', 32, by, secondaryWidth, 54, true);
+        if (!app.retryRead) this.button('challenge', app.unlocked >= 20 ? '挑战模式' : '挑战 · 20关解锁', 44 + secondaryWidth, by, secondaryWidth, 54);
         this.button('settings', '设置', 32, by + 68, secondaryWidth, 44);
         if (!app.retryRead)
             this.button('reset-progress-ask', '重置关卡进度', 44 + secondaryWidth, by + 68, secondaryWidth, 44);
@@ -8521,9 +8760,10 @@ class View {
     game(app, l) {
         const c = this.ctx, w = l.width;
         this.button('pause', 'Ⅱ', 16, l.top, 44, 44);
-        text(c, '箭间', w / 2, l.top + 15, 17, COLORS.ink, 'center', 500);
-        text(c, '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
+        text(c, app.mode === 'challenge' ? '挑战模式' : '箭间', w / 2, l.top + 15, 17, COLORS.ink, 'center', 500);
+        text(c, app.mode === 'challenge' ? '20×20 · 4块障碍' : '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
         const s = app.session;
+        if (s && s.level.number >= 3 && !app.loading) this.button('items', '道具', 68, l.top, 52, 44);
         text(c, '剩余箭头', 26, l.top + 80, 12, COLORS.muted);
         text(c, s ? s.remaining : '—', 26, l.top + 108, 27, COLORS.ink, 'left', 500);
         if (s?.remainingMs != null) {
@@ -8533,7 +8773,7 @@ class View {
         }
         if (s?.lives !== null && s) {
             text(c, '剩余机会', w - 26, l.top + 80, 12, COLORS.muted, 'right');
-            text(c, '♥'.repeat(s.lives) + '♡'.repeat(s.level.lifeLimit - s.lives), w - 26, l.top + 108, 23, COLORS.green, 'right');
+            text(c, '♥'.repeat(s.lives) + '♡'.repeat(Math.max(0, s.level.lifeLimit + 1 - s.items.life - s.lives)), w - 26, l.top + 108, 23, COLORS.green, 'right');
         }
         else {
             rounded(c, w - 108, l.top + 88, 82, 29, 14, COLORS.mint);
@@ -8562,7 +8802,8 @@ class View {
                 c.arc(p[0], p[1], this.transform.cell * .5, 0, Math.PI * 2);
                 c.stroke();
             }
-            const progress = s.removed.size / s.level.arrows.length, py = l.card.y + l.card.height + 19;
+            const total = s.level.initialArrowCount || s.level.arrows.length;
+            const progress = (total - s.remaining) / total, py = l.card.y + l.card.height + 19;
             rounded(c, 32, py, w - 64, 3, 1.5, COLORS.line);
             if (progress > 0)
                 rounded(c, 32, py, (w - 64) * progress, 3, 1.5, COLORS.green);
@@ -8587,6 +8828,20 @@ class View {
         c.fillRect(0, 0, w, l.height);
         let title = '', description = '', actions = [];
         switch (app.modal) {
+            case 'rush-locked':
+                title = '挑战模式尚未解锁'; description = '通关第19关、到达第20关后开启。';
+                actions = [['rush-notice-close', '知道了', true]]; break;
+            case 'rush-unlocked':
+                title = '挑战模式已解锁'; description = '已到达第20关！主页可进入90秒高难度挑战，普通闯关进度独立保留。';
+                actions = [['rush-notice-close', '知道了', true]]; break;
+            case 'items': {
+                const s = app.session;
+                title = '道具'; description = '每局各1次，查看道具时暂停计时。';
+                actions = [['item-time', s.remainingMs === null ? '加时 · 本关不限时' : '加时30秒 · ' + s.items.time], ['item-life', s.lives === null ? '容错 · 本关不限次' : '容错+1 · ' + s.items.life], ['item-shuffle', '重排剩余箭头 · ' + s.items.shuffle], ['items-done', '返回游戏', true]];
+                break;
+            }
+            case 'shuffling':
+                title = '正在重排'; description = '保留剩余箭头数量，验证通路中…'; break;
             case 'pause':
                 title = '歇一会儿';
                 description = '棋盘会在这里等你。';
@@ -8599,8 +8854,13 @@ class View {
                 break;
             case 'won':
                 title = '全部解开了';
-                description = '第 ' + app.currentLevel + ' 关完成，所有箭头已清空。';
-                actions = [['next', '下一关', true], ['home', '返回首页']];
+                description = app.mode === 'challenge' ? '挑战成功！所有箭头已清空。' : '第 ' + app.currentLevel + ' 关完成，所有箭头已清空。';
+                actions = [['next', app.mode === 'challenge' ? '再挑战一局' : '下一关', true], ['home', '返回首页']];
+                break;
+            case 'rush-ready':
+                title = '90秒极限挑战';
+                description = '20×20满棋盘、4块障碍、3次容错。开始后计时，可放大拖动。返回首页结束本轮，普通闯关进度保留。';
+                actions = [['rush-accept', '开始挑战', true], ['home', '返回首页']];
                 break;
             case 'failed':
                 title = '再试一次';
@@ -8610,7 +8870,7 @@ class View {
             case 'settings':
                 title = '设置';
                 description = '按你喜欢的方式，安静地解谜。';
-                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ...(!app.retryRead ? [['reset-progress-ask', '重置关卡进度']] : []), ['settings-done', '完成', true]];
+                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ...(!app.retryRead && app.mode !== 'challenge' ? [['reset-progress-ask', '重置关卡进度']] : []), ['settings-done', '完成', true]];
                 break;
             case 'reset-progress':
                 title = '重置关卡进度？';
@@ -8637,6 +8897,7 @@ class View {
     hitButton(x, y) { return this.buttons.find(b => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height)?.id || null; }
 }
 module.exports = { View, layout, COLORS, rounded, text };
+
 
 },
 "src/rendering/board.js":function(module,exports,require){
@@ -8775,148 +9036,5 @@ class Pointer {
     cancel() { this.active = null; this.invalid = false; }
 }
 module.exports = { hitArrow, Pointer };
-
-},
-"src/persistence/store.js":function(module,exports,require){
-'use strict';
-const { clone, validateLevel } = require("src/domain/board.js");
-const { Session } = require("src/domain/session.js");
-const { lifeLimit } = require("src/config.js");
-const { solve } = require("src/generation/validate.js");
-const KEY = 'arrow-garden.save.v1', BACKUP = KEY + '.backup';
-function checksum(value) { let n = 2166136261; for (let i = 0; i < value.length; i++) {
-    n ^= value.charCodeAt(i);
-    n = Math.imul(n, 16777619);
-} return (n >>> 0).toString(16); }
-function snapshot(app) {
-    let session = null;
-    if (app.session) {
-        const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
-        session = { level: clone(s.level), removed, lives: s.lives, state: s.state === 'failed' ? 'failed' : removed.length === s.level.arrows.length ? 'won' : 'playing' };
-        session.remainingMs = s.remainingMs;
-        session.failureReason = s.failureReason;
-    }
-    return { version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, session };
-}
-function validProgress(p) { return Number.isInteger(p) && p >= 1 && p < 1000000; }
-function validate(data) {
-    if (!data || data.version !== 1 || !validProgress(data.currentLevel) || !validProgress(data.unlocked) || typeof data.tutorialDone !== 'boolean' || typeof data.lifeIntroDone !== 'boolean' || typeof data.settings?.sound !== 'boolean' || typeof data.settings?.vibration !== 'boolean')
-        return false;
-    if (data.session === null)
-        return true;
-    const s = data.session;
-    if (!s || !validateLevel(s.level).valid || !solve(s.level).valid || !validProgress(s.level.number) || s.level.number !== data.currentLevel || !Array.isArray(s.removed) || new Set(s.removed).size !== s.removed.length)
-        return false;
-    const ids = new Set(s.level.arrows.map(a => a.id));
-    if (s.removed.some(id => !ids.has(id)))
-        return false;
-    if (s.level.lifeLimit === null ? s.lives !== null : !Number.isInteger(s.lives) || s.lives < 0 || s.lives > s.level.lifeLimit)
-        return false;
-    if (!['playing', 'won', 'failed'].includes(s.state))
-        return false;
-    if (s.level.timeLimitMs != null && (!Number.isFinite(s.remainingMs) || s.remainingMs < 0 || s.remainingMs > s.level.timeLimitMs)) return false;
-    if (s.state === 'failed')
-        return s.lives === 0 || s.failureReason === 'timeout' && s.level.timeLimitMs != null && s.remainingMs === 0;
-    if (s.level.timeLimitMs != null && s.remainingMs === 0) return false;
-    if (s.lives === 0)
-        return false;
-    return (s.state === 'won') === (s.removed.length === ids.size);
-}
-function encode(data) { const payload = JSON.stringify(data); return JSON.stringify({ payload, checksum: checksum(payload) }); }
-function decode(raw) { try {
-    const envelope = JSON.parse(raw);
-    if (typeof envelope.payload !== 'string' || checksum(envelope.payload) !== envelope.checksum)
-        return null;
-    const data = JSON.parse(envelope.payload);
-    return validate(data) ? data : null;
-}
-catch {
-    return null;
-} }
-function recoverOriginal(raw) {
-    try {
-        const envelope = JSON.parse(raw), data = JSON.parse(envelope.payload), level = data.session?.level;
-        if (!validateLevel(level).valid || !solve(level).valid || !validProgress(level.number))
-            return null;
-        return { version: 1, currentLevel: level.number, unlocked: level.number, settings: { sound: true, vibration: true }, tutorialDone: level.number > 1, lifeIntroDone: false, session: { level, removed: [], lives: level.lifeLimit, remainingMs: level.timeLimitMs ?? null, state: 'playing' } };
-    }
-    catch {
-        return null;
-    }
-}
-function createStore(storage) {
-    return { load() {
-            const raw = storage.get(KEY), backup = storage.get(BACKUP);
-            if (!raw && !backup)
-                return { data: null, recovered: false };
-            const current = decode(raw);
-            if (current)
-                return { data: current, recovered: false };
-            const previous = decode(backup);
-            if (previous)
-                return { data: previous, recovered: true };
-            return { data: recoverOriginal(raw) || recoverOriginal(backup), recovered: true };
-        }, save(data) { if (!validate(data))
-            throw new Error('Refusing invalid snapshot'); const value = encode(data); storage.set(KEY, value); storage.set(BACKUP, value); return true; } };
-}
-function restore(app, data) {
-    if (!validate(data))
-        throw new Error('Invalid saved game');
-    for (const key of ['currentLevel', 'unlocked', 'tutorialDone', 'lifeIntroDone'])
-        app[key] = data[key];
-    app.settings = { ...data.settings };
-    if (data.session) {
-        const state = data.session;
-        app.session = new Session(state.level);
-        app.session.removed = new Set(state.removed);
-        app.session.lives = state.lives;
-        if (state.level.lifeLimit === null && lifeLimit(state.level.number) !== null) {
-            app.session.level.lifeLimit = lifeLimit(state.level.number);
-            app.session.lives = app.session.level.lifeLimit;
-        }
-        app.session.state = state.state;
-        app.session.remainingMs = state.remainingMs ?? state.level.timeLimitMs ?? null;
-        app.session.failureReason = state.failureReason || (state.state === 'failed' ? 'lives' : null);
-        app.tutorialStep = state.level.number === 1 && !app.tutorialDone ? 1 : 0;
-    }
-    app.screen = 'home';
-    app.modal = null;
-}
-function bindPersistence(app, storage) {
-    const store = createStore(storage);
-    let readBlocked = false;
-    app.persist = () => { if (readBlocked) {
-        app.savedError = true;
-        return;
-    } try {
-        store.save(snapshot(app));
-        app.savedError = false;
-    }
-    catch {
-        app.savedError = true;
-    } app.dirty = true; };
-    function read() { try {
-        const loaded = store.load();
-        if (loaded.data)
-            restore(app, loaded.data);
-        readBlocked = false;
-        app.retryRead = null;
-        app.savedError = false;
-        if (loaded.recovered) {
-            app.recoveryNotice = '存档异常，已恢复可用进度';
-            app.say(app.recoveryNotice, 5000);
-        }
-    }
-    catch {
-        readBlocked = true;
-        app.savedError = true;
-        app.recoveryNotice = '暂时无法读取进度，请重试';
-        app.retryRead = read;
-    } app.dirty = true; }
-    read();
-    app.onChange = app.persist;
-    return store;
-}
-module.exports = { KEY, BACKUP, checksum, encode, decode, validate, snapshot, restore, createStore, bindPersistence };
 
 }};const cache={};function require(id){if(cache[id])return cache[id].exports;const module={exports:{}};cache[id]=module;if(!modules[id])throw new Error('Missing module '+id);modules[id](module,module.exports,require);return module.exports;}require("src/main-wechat.js");})();

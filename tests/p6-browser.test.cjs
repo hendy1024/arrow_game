@@ -170,11 +170,52 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             assert.equal(await evaluate('__arrowDebug.app.session.lives'), 3);
             report.checks.push('timer-pause-timeout-retry');
         });
+        await t.test('主页实际进入挑战，90秒说明及失败后恢复普通进度', async () => {
+            await button('challenge-accept'); await button('pause'); await button('home');
+            const number = await evaluate('__arrowDebug.app.currentLevel');
+            await evaluate('__arrowDebug.app.unlocked=20;__arrowDebug.app.challengeUnlockSeen=true;__arrowDebug.app.changed();__arrowDebug.render()'); await capture('home-challenge-mode');
+            await button('challenge'); await until('__arrowDebug.app.modal==="rush-ready"');
+            await capture('challenge-mode-ready');
+            assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'), 90000);
+            assert.equal(await evaluate('__arrowDebug.app.session.level.obstacles.length'), 4);
+            await button('rush-accept'); await capture('challenge-mode-playing');
+            await evaluate('__arrowDebug.app.session.remainingMs=100');
+            await until('__arrowDebug.app.modal==="failed"');
+            await button('home'); assert.equal(await evaluate('__arrowDebug.app.currentLevel'), number);
+            assert.equal(await evaluate('__arrowDebug.app.mode'), 'campaign');
+            await c.send('Page.reload', {}, s); await until('!!window.__arrowDebug');
+            assert.equal(await evaluate('__arrowDebug.app.currentLevel'), number);
+            report.checks.push('independent-challenge-mode');
+        });
+        await t.test('真实点击三种道具，重排剩余数量不变且刷新不补道具', async () => {
+            await button('start'); await until('__arrowDebug.app.screen==="game"');
+            await button('items');
+            const count = await evaluate('__arrowDebug.app.session.remaining'), before = await evaluate('__arrowDebug.app.session.remainingMs');
+            await button('item-time'); await button('item-time');
+            assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'), before + 30000);
+            await button('item-life'); assert.equal(await evaluate('__arrowDebug.app.session.lives'), 4);
+            await button('item-shuffle'); await until('__arrowDebug.app.modal==="items" && __arrowDebug.app.session.items.shuffle===0');
+            assert.equal(await evaluate('__arrowDebug.app.session.remaining'), count);
+            assert.equal(await evaluate('__arrowDebug.solve(__arrowDebug.app.session.level).valid'), true);
+            await capture('items-used');
+            await c.send('Page.reload', {}, s); await until('!!window.__arrowDebug');
+            assert.equal(await evaluate('__arrowDebug.app.session.items.shuffle'), 0);
+            assert.equal(await evaluate('__arrowDebug.app.session.lives'), 4);
+            report.checks.push('items-and-reshuffle-persistence');
+        });
+        await t.test('第19关通关实际弹出挑战解锁提示', async () => {
+            await evaluate("__arrowDebug.fixture('boundary'); __arrowDebug.app.currentLevel=19; __arrowDebug.app.session.level.number=19; __arrowDebug.app.unlocked=19; __arrowDebug.app.challengeUnlockSeen=false; __arrowDebug.render()");
+            await arrow('a'); await until('__arrowDebug.app.modal==="rush-unlocked"');
+            await capture('challenge-unlocked'); await button('rush-notice-close');
+            assert.equal(await evaluate('__arrowDebug.app.modal'), 'won');
+            report.checks.push('challenge-unlock-notice');
+        });
     }
     finally {
         fs.writeFileSync('reports/browser.json', JSON.stringify(report, null, 2));
         await b.close();
     }
 });
+
 
 

@@ -57,8 +57,9 @@ class View {
         drawBoard(c, fixtures.tutorial, { x, y, width: size, height: size });
         const by = Math.min(l.bottom - 123, Math.max(y + size + 36, l.top + usable * .73));
         text(c, '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关 · ' + CONFIG.profiles[profileIndex(app.currentLevel)].name, w / 2, by - 24, 13, COLORS.muted, 'center');
-        this.button('start', app.session ? '继续游戏' : '开始游戏', 32, by, w - 64, 54, true);
         const secondaryWidth = (w - 76) / 2;
+        this.button('start', app.session ? '继续闯关' : '开始闯关', 32, by, secondaryWidth, 54, true);
+        if (!app.retryRead) this.button('challenge', app.unlocked >= 20 ? '挑战模式' : '挑战 · 20关解锁', 44 + secondaryWidth, by, secondaryWidth, 54);
         this.button('settings', '设置', 32, by + 68, secondaryWidth, 44);
         if (!app.retryRead)
             this.button('reset-progress-ask', '重置关卡进度', 44 + secondaryWidth, by + 68, secondaryWidth, 44);
@@ -68,9 +69,10 @@ class View {
     game(app, l) {
         const c = this.ctx, w = l.width;
         this.button('pause', 'Ⅱ', 16, l.top, 44, 44);
-        text(c, '箭间', w / 2, l.top + 15, 17, COLORS.ink, 'center', 500);
-        text(c, '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
+        text(c, app.mode === 'challenge' ? '挑战模式' : '箭间', w / 2, l.top + 15, 17, COLORS.ink, 'center', 500);
+        text(c, app.mode === 'challenge' ? '20×20 · 4块障碍' : '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
         const s = app.session;
+        if (s && s.level.number >= 3 && !app.loading) this.button('items', '道具', 68, l.top, 52, 44);
         text(c, '剩余箭头', 26, l.top + 80, 12, COLORS.muted);
         text(c, s ? s.remaining : '—', 26, l.top + 108, 27, COLORS.ink, 'left', 500);
         if (s?.remainingMs != null) {
@@ -80,7 +82,7 @@ class View {
         }
         if (s?.lives !== null && s) {
             text(c, '剩余机会', w - 26, l.top + 80, 12, COLORS.muted, 'right');
-            text(c, '♥'.repeat(s.lives) + '♡'.repeat(s.level.lifeLimit - s.lives), w - 26, l.top + 108, 23, COLORS.green, 'right');
+            text(c, '♥'.repeat(s.lives) + '♡'.repeat(Math.max(0, s.level.lifeLimit + 1 - s.items.life - s.lives)), w - 26, l.top + 108, 23, COLORS.green, 'right');
         }
         else {
             rounded(c, w - 108, l.top + 88, 82, 29, 14, COLORS.mint);
@@ -109,7 +111,8 @@ class View {
                 c.arc(p[0], p[1], this.transform.cell * .5, 0, Math.PI * 2);
                 c.stroke();
             }
-            const progress = s.removed.size / s.level.arrows.length, py = l.card.y + l.card.height + 19;
+            const total = s.level.initialArrowCount || s.level.arrows.length;
+            const progress = (total - s.remaining) / total, py = l.card.y + l.card.height + 19;
             rounded(c, 32, py, w - 64, 3, 1.5, COLORS.line);
             if (progress > 0)
                 rounded(c, 32, py, (w - 64) * progress, 3, 1.5, COLORS.green);
@@ -134,6 +137,20 @@ class View {
         c.fillRect(0, 0, w, l.height);
         let title = '', description = '', actions = [];
         switch (app.modal) {
+            case 'rush-locked':
+                title = '挑战模式尚未解锁'; description = '通关第19关、到达第20关后开启。';
+                actions = [['rush-notice-close', '知道了', true]]; break;
+            case 'rush-unlocked':
+                title = '挑战模式已解锁'; description = '已到达第20关！主页可进入90秒高难度挑战，普通闯关进度独立保留。';
+                actions = [['rush-notice-close', '知道了', true]]; break;
+            case 'items': {
+                const s = app.session;
+                title = '道具'; description = '每局各1次，查看道具时暂停计时。';
+                actions = [['item-time', s.remainingMs === null ? '加时 · 本关不限时' : '加时30秒 · ' + s.items.time], ['item-life', s.lives === null ? '容错 · 本关不限次' : '容错+1 · ' + s.items.life], ['item-shuffle', '重排剩余箭头 · ' + s.items.shuffle], ['items-done', '返回游戏', true]];
+                break;
+            }
+            case 'shuffling':
+                title = '正在重排'; description = '保留剩余箭头数量，验证通路中…'; break;
             case 'pause':
                 title = '歇一会儿';
                 description = '棋盘会在这里等你。';
@@ -146,8 +163,13 @@ class View {
                 break;
             case 'won':
                 title = '全部解开了';
-                description = '第 ' + app.currentLevel + ' 关完成，所有箭头已清空。';
-                actions = [['next', '下一关', true], ['home', '返回首页']];
+                description = app.mode === 'challenge' ? '挑战成功！所有箭头已清空。' : '第 ' + app.currentLevel + ' 关完成，所有箭头已清空。';
+                actions = [['next', app.mode === 'challenge' ? '再挑战一局' : '下一关', true], ['home', '返回首页']];
+                break;
+            case 'rush-ready':
+                title = '90秒极限挑战';
+                description = '20×20满棋盘、4块障碍、3次容错。开始后计时，可放大拖动。返回首页结束本轮，普通闯关进度保留。';
+                actions = [['rush-accept', '开始挑战', true], ['home', '返回首页']];
                 break;
             case 'failed':
                 title = '再试一次';
@@ -157,7 +179,7 @@ class View {
             case 'settings':
                 title = '设置';
                 description = '按你喜欢的方式，安静地解谜。';
-                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ...(!app.retryRead ? [['reset-progress-ask', '重置关卡进度']] : []), ['settings-done', '完成', true]];
+                actions = [['sound', '音效  ' + (app.settings.sound ? '开启' : '关闭')], ['vibration', '震动  ' + (app.settings.vibration ? '开启' : '关闭')], ...(!app.retryRead && app.mode !== 'challenge' ? [['reset-progress-ask', '重置关卡进度']] : []), ['settings-done', '完成', true]];
                 break;
             case 'reset-progress':
                 title = '重置关卡进度？';
@@ -184,3 +206,4 @@ class View {
     hitButton(x, y) { return this.buttons.find(b => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height)?.id || null; }
 }
 module.exports = { View, layout, COLORS, rounded, text };
+

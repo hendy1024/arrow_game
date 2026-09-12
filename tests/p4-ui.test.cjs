@@ -19,7 +19,7 @@ test('P4 各手机尺寸棋盘、安全区和所有弹窗按钮不溢出', async
     const info = { width, height, safeTop: 24, menuBottom: 54, safeBottom: 24 };
     const l = layout(info);
     assert.ok(l.card.y + l.card.height <= l.bottom);
-    for (const modal of [null, 'pause', 'restart', 'won', 'failed', 'settings', 'reset-progress', 'life-intro']) {
+    for (const modal of [null, 'pause', 'restart', 'won', 'failed', 'settings', 'reset-progress', 'life-intro', 'rush-ready', 'items', 'shuffling', 'rush-locked', 'rush-unlocked']) {
         a.modal = modal;
         v.render(a, info);
         for (const b of v.buttons) {
@@ -29,7 +29,9 @@ test('P4 各手机尺寸棋盘、安全区和所有弹窗按钮不溢出', async
         }
     }
 } });
-test('P4 设置关闭返回首页，常态按钮不含提示或撤销', () => { const a = make(), v = new View(a.platform.ctx); a.action('settings'); a.action('settings-done'); assert.equal(a.screen, 'home'); assert.equal(a.modal, null); v.render(a, a.platform.info()); assert.deepEqual(v.buttons.map(x => x.id), ['start', 'settings', 'reset-progress-ask']); });
+test('P4 设置关闭返回首页，常态按钮不含提示或撤销', () => { const a = make(), v = new View(a.platform.ctx); a.action('settings'); a.action('settings-done'); assert.equal(a.screen, 'home'); assert.equal(a.modal, null); v.render(a, a.platform.info()); assert.deepEqual(v.buttons.map(x => x.id), ['start', 'challenge', 'settings', 'reset-progress-ask']); });
+
+
 
 
 

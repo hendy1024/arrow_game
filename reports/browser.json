@@ -14,7 +14,10 @@
     "local-performance",
     "recorded-movement",
     "reset-progress-persistence",
-    "timer-pause-timeout-retry"
+    "timer-pause-timeout-retry",
+    "independent-challenge-mode",
+    "items-and-reshuffle-persistence",
+    "challenge-unlock-notice"
   ],
   "screenshots": [
     "home.png",
@@ -34,14 +37,19 @@
     "reset-confirm.png",
     "timer-intro.png",
     "obstacles-timer.png",
-    "timeout-failed.png"
+    "timeout-failed.png",
+    "home-challenge-mode.png",
+    "challenge-mode-ready.png",
+    "challenge-mode-playing.png",
+    "items-used.png",
+    "challenge-unlocked.png"
   ],
   "performance": {
-    "medianMs": 16.69999999999999,
+    "medianMs": 16.699999999999932,
     "p95Ms": 16.700000000000045,
-    "averageMs": 17.036666666666665,
-    "heapBefore": 2507556,
-    "heapAfter": 1754152,
+    "averageMs": 16.666666666666668,
+    "heapBefore": 2341268,
+    "heapAfter": 2748416,
     "iterations": 200
   },
   "video": "snake-and-parallel.webm"

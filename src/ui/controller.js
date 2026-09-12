@@ -24,6 +24,9 @@ class Controller {
         this.onChange = () => { };
         this.dirty = true;
         this.savedError = false;
+        this.mode = 'campaign';
+        this.campaignSnapshot = null;
+        this.challengeUnlockSeen = false;
     }
     changed() { this.dirty = true; this.onChange(); }
     say(message, duration = CONFIG.messageMs) { this.message = message; this.messageUntil = this.clock + duration; this.dirty = true; }
@@ -48,7 +51,7 @@ class Controller {
             const result = await this.generate(number, this.platform.seed());
             if (token !== this.token)
                 return;
-            this.session = new Session(result.level);
+            this.session = new Session(this.mode === 'challenge' ? { ...result.level, timeLimitMs: 90000, lifeLimit: 3 } : result.level);
             this.currentLevel = number;
             this.loading = false;
             this.configureIntro();
@@ -64,6 +67,7 @@ class Controller {
         }
     }
     configureIntro() {
+        if (this.mode === 'challenge') { this.tutorialStep = 0; this.session.pause(); this.modal = 'rush-ready'; return; }
         if (this.session.level.number === 1 && !this.tutorialDone)
             this.tutorialStep = 1;
         else
@@ -79,11 +83,12 @@ class Controller {
         }
     }
     syncModal() {
+        if (this.mode !== 'challenge' && this.unlocked >= 20 && !this.challengeUnlockSeen) { this.session.pause(); this.modal = 'rush-unlocked'; return; }
         if (this.session.state === 'won')
             this.modal = 'won';
         else if (this.session.state === 'failed' && (!this.session.moves.size || this.session.failureReason === 'timeout'))
             this.modal = 'failed';
-        else if (this.session.level.lifeLimit !== null && !this.lifeIntroDone) {
+        else if (this.mode !== 'challenge' && this.session.level.lifeLimit !== null && !this.lifeIntroDone) {
             this.session.pause();
             this.modal = 'life-intro';
         }
@@ -121,7 +126,7 @@ class Controller {
             else if (event.type === 'removed')
                 this.platform.feedback('removed', this.settings);
             else if (event.type === 'won') {
-                this.unlocked = Math.max(this.unlocked, this.session.level.number + 1);
+                if (this.mode !== 'challenge') this.unlocked = Math.max(this.unlocked, this.session.level.number + 1);
                 this.platform.feedback('won', this.settings);
             }
             if (event.type === 'removed' || event.type === 'won' || event.type === 'failed')
@@ -144,6 +149,38 @@ class Controller {
         }
     }
     action(name) {
+        if (name === 'rush-notice-close' && ['rush-locked', 'rush-unlocked'].includes(this.modal)) {
+            if (this.modal === 'rush-unlocked') this.challengeUnlockSeen = true;
+            this.modal = null; if (this.screen === 'game' && this.session) this.syncModal(); this.changed(); return;
+        }
+        if (name === 'challenge' && this.screen === 'home' && !this.modal && this.unlocked < 20) { this.modal = 'rush-locked'; this.changed(); return; }
+        if (name === 'challenge' && this.screen === 'home' && !this.modal && !this.loading && !this.retryRead) {
+            this.campaignSnapshot = require('../persistence/store').snapshot(this);
+            this.mode = 'challenge'; this.session = null; this.currentLevel = 30;
+            return this.start(30);
+        }
+        if (name === 'items' && !this.loading && this.session && (this.modal === 'pause' || !this.modal && this.screen === 'game' && this.session.state === 'playing')) {
+            if (this.session.moves.size) { this.say('请等箭头移出后再使用道具'); return; }
+            this.itemsReturn = this.modal; this.session.pause(); this.modal = 'items'; this.changed(); return;
+        }
+        if (name === 'items-done' && this.modal === 'items') { this.modal = this.itemsReturn || null; if (!this.modal) this.session.resume(); this.changed(); return; }
+        if (name.startsWith('item-') && this.modal === 'items') {
+            const kind = name.slice(5), s = this.session;
+            if (!s.items[kind]) return;
+            if (kind === 'time' && s.remainingMs !== null) { s.remainingMs += 30000; s.items.time--; }
+            else if (kind === 'life' && s.lives !== null) { s.lives++; s.items.life--; }
+            else if (kind === 'shuffle') return this.shuffle();
+            this.changed(); return;
+        }
+        if (name === 'rush-accept' && this.modal === 'rush-ready') {
+            this.modal = null; this.session.resume(); this.changed(); return;
+        }
+        if (name === 'home' && this.mode === 'challenge' && (this.modal || this.loadError)) {
+            const settings = { ...this.settings };
+            require('../persistence/store').restore(this, this.campaignSnapshot);
+            this.settings = settings; this.mode = 'campaign'; this.campaignSnapshot = null;
+            this.loading = this.loadError = false; this.message = ''; this.changed(); return;
+        }
         if (name === 'retry-save') {
             if (this.retryRead)
                 this.retryRead();
@@ -178,7 +215,7 @@ class Controller {
         }
         else if (name === 'vibration' && this.modal === 'settings')
             this.settings.vibration = !this.settings.vibration;
-        else if (name === 'reset-progress-ask' && (this.modal === 'settings' || this.screen === 'home' && !this.modal) && !this.retryRead) {
+        else if (name === 'reset-progress-ask' && this.mode !== 'challenge' && (this.modal === 'settings' || this.screen === 'home' && !this.modal) && !this.retryRead) {
             this.resetReturn = this.modal;
             this.modal = 'reset-progress';
         }
@@ -190,6 +227,7 @@ class Controller {
             this.session = null;
             this.currentLevel = this.unlocked = 1;
             this.tutorialDone = this.lifeIntroDone = false;
+            this.challengeUnlockSeen = false;
             this.tutorialStep = 0;
             this.loading = this.loadError = false;
             this.screen = 'home';
@@ -217,7 +255,7 @@ class Controller {
             this.session.resume();
         }
         else if (name === 'next' && this.modal === 'won') {
-            const number = this.session.level.number + 1;
+            const number = this.mode === 'challenge' ? 30 : this.session.level.number + 1;
             this.session = null;
             this.currentLevel = number;
             return this.start(number);
@@ -231,5 +269,20 @@ class Controller {
         }
         this.changed();
     }
+    async shuffle() {
+        const old = this.session, token = ++this.token;
+        this.modal = 'shuffling'; this.changed();
+        try {
+            const level = await require('../generation/reshuffle').reshuffle(old, this.generate, this.platform.seed());
+            if (token !== this.token || this.session !== old) return;
+            const next = new Session(level);
+            next.restartLevel = old.restartLevel || old.level;
+            next.lives = old.lives; next.remainingMs = old.remainingMs;
+            next.items = { ...old.items, shuffle: old.items.shuffle - 1 };
+            next.pause(); this.session = next;
+        } catch { this.say('重排未完成，道具已保留'); }
+        if (token === this.token) { this.modal = 'items'; this.changed(); }
+    }
 }
 module.exports = { Controller };
+

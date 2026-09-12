@@ -8,6 +8,8 @@ class Session {
         if (!result.valid)
             throw new Error('Invalid level: ' + result.errors.join(','));
         this.level = clone(level);
+        this.restartLevel = null;
+        this.items = { time: 1, life: 1, shuffle: 1 };
         this.removed = new Set();
         this.moves = new Map();
         this.feedback = new Map();
@@ -117,6 +119,6 @@ class Session {
     } return false; }
     resume() { if (this.state === 'paused')
         this.state = 'playing'; }
-    restart() { return new Session(this.level); }
+    restart() { return new Session(this.restartLevel || this.level); }
 }
 module.exports = { Session };
