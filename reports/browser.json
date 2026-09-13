@@ -46,11 +46,11 @@
     "challenge-unlocked.png"
   ],
   "performance": {
-    "medianMs": 16.700000000000045,
+    "medianMs": 16.699999999999932,
     "p95Ms": 16.700000000000045,
-    "averageMs": 16.666666666666668,
-    "heapBefore": 3971104,
-    "heapAfter": 2961724,
+    "averageMs": 16.664444444444445,
+    "heapBefore": 4209052,
+    "heapAfter": 4494000,
     "iterations": 200
   },
   "video": "snake-and-parallel.webm"

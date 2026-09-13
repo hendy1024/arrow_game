@@ -46,7 +46,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             await button('next');
             await until('__arrowDebug.app.currentLevel===2 && !__arrowDebug.app.loading');
             assert.equal(await evaluate('__arrowDebug.app.modal'),'life-intro');
-            assert.equal(await evaluate('__arrowDebug.app.session.level.width'),20);
+            assert.equal(await evaluate('__arrowDebug.app.session.level.width'),25);
             assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'),120000);
             await button('life-accept');
             report.checks.push('snake-and-win');
@@ -186,6 +186,8 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             await delay(200); assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'), remaining);
             await button('resume'); await capture('obstacles-timer');
             await evaluate('__arrowDebug.app.session.remainingMs=100');
+            await until('__arrowDebug.app.modal==="time-rescue"');
+            await button('time-rescue-decline');
             await until('__arrowDebug.app.modal==="failed"');
             assert.equal(await evaluate('__arrowDebug.app.session.failureReason'), 'timeout');
             await capture('timeout-failed'); await button('restart');
@@ -203,6 +205,8 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             assert.equal(await evaluate('__arrowDebug.app.session.level.obstacles.length'), 4);
             await button('rush-accept'); await capture('challenge-mode-playing');
             await evaluate('__arrowDebug.app.session.remainingMs=100');
+            await until('__arrowDebug.app.modal==="time-rescue"');
+            await button('time-rescue-decline');
             await until('__arrowDebug.app.modal==="failed"');
             await button('home'); assert.equal(await evaluate('__arrowDebug.app.currentLevel'), number);
             assert.equal(await evaluate('__arrowDebug.app.mode'), 'campaign');

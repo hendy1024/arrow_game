@@ -15,6 +15,7 @@ function snapshot(app) {
         const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
         session = { level: clone(s.level), removed, lives: s.lives, state: s.state === 'failed' ? 'failed' : removed.length === s.level.arrows.length ? 'won' : 'playing' };
         session.reviveDeclined = !!s.reviveDeclined;
+        session.timeReviveDeclined = !!s.timeReviveDeclined;
         session.recordMs = s.recordMs; session.recordEligible = s.recordEligible && s.moves.size === 0;
         session.remainingMs = s.remainingMs;
         session.failureReason = s.failureReason;
@@ -116,6 +117,7 @@ function restore(app, data) {
         app.session.removed = new Set(state.removed);
         app.session.lives = state.lives;
         app.session.reviveDeclined = !!state.reviveDeclined;
+        app.session.timeReviveDeclined = !!state.timeReviveDeclined;
         app.session.recordMs = state.recordMs || 0; app.session.recordEligible = state.recordEligible === true;
         if (!state.level.campaignConfigured && state.level.lifeLimit === null && lifeLimit(state.level.number) !== null) {
             app.session.level.lifeLimit = lifeLimit(state.level.number);

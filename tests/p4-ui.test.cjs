@@ -19,7 +19,7 @@ test('P4 各手机尺寸棋盘、安全区和所有弹窗按钮不溢出', async
     const info = { width, height, safeTop: 24, menuBottom: 54, safeBottom: 24 };
     const l = layout(info);
     assert.ok(l.card.y + l.card.height <= l.bottom);
-    for (const modal of [null, 'pause', 'restart', 'won', 'failed', 'life-rescue', 'settings', 'reset-progress', 'life-intro', 'rush-ready', 'items', 'shuffling', 'rush-locked', 'rush-unlocked']) {
+    for (const modal of [null, 'pause', 'restart', 'won', 'failed', 'life-rescue', 'time-rescue', 'settings', 'reset-progress', 'life-intro', 'rush-ready', 'items', 'shuffling', 'rush-locked', 'rush-unlocked']) {
         a.modal = modal;
         v.render(a, info);
         for (const b of v.buttons) {

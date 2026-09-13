@@ -16,7 +16,7 @@ function createMusic(createAudio) {
                 if (!audio) {
                     audio = createAudio();
                     if (!audio) return;
-                    audio.loop = true; audio.volume = .18;
+                    audio.loop = true; audio.volume = .36;
                     audio.onError?.(() => { playing = false; });
                 }
                 playing = true;

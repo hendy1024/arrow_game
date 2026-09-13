@@ -1,6 +1,7 @@
 'use strict';
 function dismiss(app) {
     const targets = {
+        'time-rescue': 'time-rescue-decline',
         'life-rescue': 'life-rescue-decline', 'level-detail': 'map-detail-close', pause: 'resume', settings: 'settings-done', restart: 'restart-cancel', 'reset-progress': 'reset-progress-cancel',
         'life-intro': 'life-accept', 'challenge-intro': 'challenge-accept', 'rush-ready': 'home',
         'rush-locked': 'rush-notice-close', 'rush-unlocked': 'rush-notice-close', 'race-unlocked': 'race-notice-close',

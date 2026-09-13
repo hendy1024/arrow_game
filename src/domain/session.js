@@ -69,7 +69,7 @@ class Session {
             }
         }
         else if (result.type === 'allowed') {
-            const speed = CONFIG.speed + exitCells(result.arrow, this.level).length * CONFIG.distanceSpeed;
+            const speed = CONFIG.speed + exitCells(result.arrow, this.level).length * CONFIG.distanceSpeed + Math.max(0, result.arrow.path.length - 6) * CONFIG.lengthSpeed;
             this.moves.set(id, { id, distance: 0, elapsedMs: 0, speed });
             this.emit('move-start', { id });
         }

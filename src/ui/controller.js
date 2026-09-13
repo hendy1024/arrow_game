@@ -90,6 +90,7 @@ class Controller {
         if (this.mode === 'race') { require('../race/controller').sync(this); return; }
         if (this.mode === 'campaign' && this.unlocked >= 20 && !this.challengeUnlockSeen) { this.session.pause(); this.modal = 'rush-unlocked'; return; }
         if (require('./life-rescue').eligible(this)) { this.modal = 'life-rescue'; return; }
+        if (require('./time-rescue').eligible(this)) { this.modal = 'time-rescue'; return; }
         if (this.session.state === 'won')
             this.modal = 'won';
         else if (this.session.state === 'failed' && (!this.session.moves.size || this.session.failureReason === 'timeout'))
@@ -148,7 +149,7 @@ class Controller {
     }
     tick(ms) {
         require('../race/controller').refreshFriends(this);
-        if (this.screen === 'game' && this.session && !this.loading && this.modal !== 'life-rescue') {
+        if (this.screen === 'game' && this.session && !this.loading && !['life-rescue', 'time-rescue'].includes(this.modal)) {
             if (this.mode === 'campaign' && this.session.state === 'playing') this.session.recordMs += require('../campaign/catalog').activeMs(this.session, ms);
             this.session.tick(ms);
             this.events();
@@ -165,6 +166,7 @@ class Controller {
         if (name === 'dismiss-modal' && this.modal) return require('./dismiss').dismiss(this);
         if (require('../campaign/controller').action(this, name)) return;
         if (require('./life-rescue').action(this, name)) return;
+        if (require('./time-rescue').action(this, name)) return;
         const raceAction = require('../race/controller').action(this, name);
         if (raceAction.handled) return raceAction.result;
         if (name === 'rush-notice-close' && ['rush-locked', 'rush-unlocked'].includes(this.modal)) {
@@ -236,6 +238,7 @@ class Controller {
             this.settings.sound = !this.settings.sound;
             if (!this.settings.sound)
                 this.platform.stopFeedback?.();
+            else this.platform.feedback('won', { sound: true, vibration: false });
         }
         else if (name === 'vibration' && this.modal === 'settings')
             this.settings.vibration = !this.settings.vibration;

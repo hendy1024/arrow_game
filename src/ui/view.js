@@ -187,6 +187,11 @@ class View {
                 description = app.inventory.life > 0 ? '使用1个容错道具，增加1次机会，继续当前棋盘。剩余道具：' + app.inventory.life : '容错道具库存为0，本局无法续关。';
                 actions = [...(app.inventory.life > 0 ? [['life-rescue-use', '使用道具继续', true]] : []), ['life-rescue-decline', '结束本局']];
                 break;
+            case 'time-rescue':
+                title = '时间用完了';
+                description = app.inventory.time > 0 ? '使用1个加时道具，增加30秒，继续当前棋盘。剩余道具：' + app.inventory.time : '加时道具库存为0，本局无法续关。';
+                actions = [...(app.inventory.time > 0 ? [['time-rescue-use', '加时30秒继续', true]] : []), ['time-rescue-decline', '结束本局']];
+                break;
             case 'failed':
                 title = '再试一次';
                 description = app.session?.failureReason === 'timeout' ? '时间到了。重新挑战会恢复完整时间和 3 次机会。' : '本次机会已用完。先观察出口，再慢慢解开。';
@@ -194,7 +199,7 @@ class View {
                 break;
             case 'settings':
                 title = '设置';
-                description = '按你喜欢的方式，安静地解谜。';
+                description = '开启操作音效可试听。\n音量随手机媒体音量调整。';
                 actions = [['music', '背景音乐'], ['sound', '操作音效'], ['vibration', '震动'], ['settings-done', '完成', true]];
                 break;
             case 'reset-progress':

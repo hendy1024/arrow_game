@@ -1,12 +1,19 @@
 'use strict';
 function createWechatPlatform(wx, globals) {
-    const music = require('./music').createMusic(() => {
+    // Configure the native audio route before creating either music or effects.
+    try { wx.setInnerAudioOption?.({ obeyMuteSwitch: false, speakerOn: true, fail: e => console.warn('音频设置失败', e) }); } catch (e) { console.warn('音频设置失败', e); }
+    function audio(kind) {
         if (!wx.createInnerAudioContext) return null;
-        const a = wx.createInnerAudioContext(); a.src = 'assets/music.wav'; return a;
+        const a = wx.createInnerAudioContext();
+        a.obeyMuteSwitch = false; a.volume = .6;
+        a.onError?.(e => console.warn('音频播放失败', kind, e));
+        a.src = 'assets/' + kind + '.wav'; return a;
+    }
+    const music = require('./music').createMusic(() => {
+        return audio('music');
     });
     const { createFeedback } = require('./feedback');
-    const feedback = createFeedback(kind => { if (!wx.createInnerAudioContext)
-        return null; const sound = wx.createInnerAudioContext(); sound.src = 'assets/' + kind + '.wav'; sound.volume = .25; sound.onError?.(() => { }); return sound; }, () => wx.vibrateShort?.({ type: 'light', fail: () => { } }));
+    const feedback = createFeedback(audio, () => wx.vibrateShort?.({ type: 'light', fail: () => { } }));
     const canvas = wx.createCanvas();
     let ctx = canvas.getContext('2d');
     function info() { const data = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync(); let menu = { bottom: 0 }; try {

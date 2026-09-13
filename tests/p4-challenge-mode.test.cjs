@@ -15,7 +15,7 @@ test('P4 挑战90秒高难度，返回与重载均保留普通闯关存档', asy
     assert.equal(a.mode, 'challenge'); assert.equal(a.modal, 'rush-ready');
     assert.equal(a.session.level.width, 20); assert.equal(a.session.level.obstacles.length, 4);
     a.tick(5000); assert.equal(a.session.remainingMs, 90000);
-    a.action('rush-accept'); a.tick(90000); assert.equal(a.modal, 'failed');
+    a.action('rush-accept'); a.tick(90000); assert.equal(a.modal, 'time-rescue'); a.action('time-rescue-decline'); assert.equal(a.modal, 'failed');
     assert.equal(a.session.failureReason, 'timeout');
     assert.deepEqual(createStore(storage).load().data, original);
     const b = make(); bindPersistence(b, storage); assert.equal(b.mode, 'campaign'); assert.equal(b.currentLevel, 3);

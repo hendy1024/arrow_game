@@ -17,7 +17,7 @@ function createFeedback(createAudio, vibrate) {
                         return;
                     sounds.set(kind, sound);
                 }
-                sound.stop?.();
+                else sound.stop?.();
                 const result = sound.play();
                 result?.catch?.(() => { });
             }

@@ -7,7 +7,7 @@ test('P10 背景音复用单个循环音源，开关即时生效，失败可重�
  let made=0,plays=0,pauses=0,destroyed=0,error;
  const a={play(){plays++;},pause(){pauses++;},destroy(){destroyed++;},onError(fn){error=fn;}};
  const m=createMusic(()=>{made++;return a;});m.set(false);assert.equal(made,0);
- m.set(true);m.set(true);assert.equal(made,1);assert.equal(plays,1);assert.equal(a.loop,true);assert.equal(a.volume,.18);
+ m.set(true);m.set(true);assert.equal(made,1);assert.equal(plays,1);assert.equal(a.loop,true);assert.equal(a.volume,.36);
  m.set(false);assert.equal(pauses,1);m.set(true);assert.equal(plays,2);
  error();m.set(true);assert.equal(plays,3);
  a.play=()=>{plays++;return Promise.reject(Error('autoplay'));};m.set(false);m.set(true);await Promise.resolve();a.play=()=>{plays++;};m.set(true);assert.equal(plays,5);
