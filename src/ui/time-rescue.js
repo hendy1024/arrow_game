@@ -10,10 +10,13 @@ function action(app, name) {
     }
     if (name !== 'time-rescue-use') return false;
     if (!eligible(app) || app.inventory.time < 1) { app.say('加时道具已用完'); app.changed(); return true; }
-    const s = app.session;
-    app.consumeItem('time'); s.remainingMs = 30000; s.failureReason = null; s.state = s.remaining ? 'playing' : 'won';
-    s.recordEligible = false; s.timeReviveDeclined = false; app.modal = null;
-    if (s.state === 'won') s.emit('won');
-    app.events(); app.changed(); return true;
+    revive(app,true); return true;
 }
-module.exports = { eligible, action };
+function revive(app,consume) {
+    const s=app.session;
+    if(consume) app.consumeItem('time');
+    s.remainingMs = s.level.timeLimitMs; s.failureReason=null; s.state=s.remaining?'playing':'won';
+    s.feedback.clear(); s.recordEligible=false; s.timeReviveDeclined=false;app.modal=null;
+    if(s.state==='won')s.emit('won');app.events();app.changed();
+}
+module.exports={eligible,action,revive};

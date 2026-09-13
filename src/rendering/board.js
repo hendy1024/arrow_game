@@ -75,6 +75,7 @@ function drawBoard(ctx, level, rect, options = {}) {
         const offset = options.offsets?.get(a.id) || 0;
         drawArrow(ctx, path.map(p => { const s = t.toScreen(p); return [s[0] + offset, s[1]]; }), a.direction, options.colors?.get(a.id), Math.max(t.cell < 13 ? 1.8 : 2.4, t.cell * .11), t.cell);
     }
+    for(const p of options.blockers||[]){const s=t.toScreen(p);ctx.strokeStyle='#e23b36';ctx.lineWidth=2.5;ctx.beginPath();ctx.arc(s[0],s[1],Math.max(5,t.cell*.5),0,Math.PI*2);ctx.stroke();}
     ctx.restore();
     return t;
 }

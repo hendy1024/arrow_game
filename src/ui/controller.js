@@ -5,6 +5,7 @@ const { CONFIG, lifeLimit } = require('../config');
 class Controller {
     constructor(platform, options = {}) {
         this.platform = platform;
+        this.challengeVisible = options.challengeVisible ?? CONFIG.challengeVisible;
         this.generate = options.generate || generateAsync;
         this.fixedCampaign = !options.generate;
         this.screen = 'home';
@@ -12,6 +13,7 @@ class Controller {
         this.session = null;
         this.currentLevel = 1;
         this.unlocked = 1;
+        this.share = { day: '', rewardClaimed: false, rescues: 0 };
         this.settings = { music: true, sound: true, vibration: true };
         this.inventory = { time: 10, life: 10, shuffle: 10 };
         this.tutorialDone = false;
@@ -82,13 +84,14 @@ class Controller {
         }
         else
             this.modal = null;
-        if (!this.modal && (this.session.level.campaignConfigured ? ((this.session.level.timeLimitMs != null && this.session.level.number === 2) || ((this.session.level.obstacles || []).length && this.session.level.number === 4)) : [15, 20].includes(this.session.level.number))) {
+        if (!this.modal && (this.session.level.campaignConfigured ? ((this.session.level.timeLimitMs != null && this.session.level.number === 2) || ((this.session.level.obstacles || []).length && this.session.level.number === 3)) : [15, 20].includes(this.session.level.number))) {
             this.session.pause(); this.modal = 'challenge-intro';
         }
     }
     syncModal() {
         if (this.mode === 'race') { require('../race/controller').sync(this); return; }
-        if (this.mode === 'campaign' && this.unlocked >= 20 && !this.challengeUnlockSeen) { this.session.pause(); this.modal = 'rush-unlocked'; return; }
+        if (this.challengeVisible && this.mode === 'campaign' && this.unlocked >= 20 && !this.challengeUnlockSeen) { this.session.pause(); this.modal = 'rush-unlocked'; return; }
+        if (this.sharePending) return;
         if (require('./life-rescue').eligible(this)) { this.modal = 'life-rescue'; return; }
         if (require('./time-rescue').eligible(this)) { this.modal = 'time-rescue'; return; }
         if (this.session.state === 'won')
@@ -137,7 +140,7 @@ class Controller {
                 if (this.mode === 'campaign') {
                     const previous = this.unlocked;
                     this.unlocked = Math.max(this.unlocked, this.session.level.number + 1);
-                    if (previous < 6 && this.unlocked >= 6 && !this.raceUnlockSeen) this.modal = 'race-unlocked';
+                    if (previous < 5 && this.unlocked >= 5 && !this.raceUnlockSeen) this.modal = 'race-unlocked';
                 }
                 this.platform.feedback('won', this.settings);
             }
@@ -149,7 +152,7 @@ class Controller {
     }
     tick(ms) {
         require('../race/controller').refreshFriends(this);
-        if (this.screen === 'game' && this.session && !this.loading && !['life-rescue', 'time-rescue'].includes(this.modal)) {
+        if (!this.sharePending && this.screen === 'game' && this.session && !this.loading && !['life-rescue', 'time-rescue'].includes(this.modal)) {
             if (this.mode === 'campaign' && this.session.state === 'playing') this.session.recordMs += require('../campaign/catalog').activeMs(this.session, ms);
             this.session.tick(ms);
             this.events();
@@ -163,6 +166,16 @@ class Controller {
         }
     }
     action(name) {
+        if (require('./sharing').action(this,name)) return;
+        if (name.startsWith('trial-item-')) {
+            const kind = name.slice(11);
+            if (this.platform.isTrial === true && this.screen === 'home' && !this.modal && !this.loading && !this.retryRead && !this.savedError && ['time', 'life', 'shuffle'].includes(kind) && this.inventory[kind] < 10000000) {
+                this.inventory[kind] += 1;
+                this.changed();
+            }
+            return;
+        }
+        if(name==='challenge'&&!this.challengeVisible)return;
         if (name === 'dismiss-modal' && this.modal) return require('./dismiss').dismiss(this);
         if (require('../campaign/controller').action(this, name)) return;
         if (require('./life-rescue').action(this, name)) return;
@@ -189,8 +202,8 @@ class Controller {
             if (!Object.hasOwn(this.inventory, kind)) return;
             if (s.moves.size) { this.say('请等箭头移出后再使用道具'); return; }
             if (!this.inventory[kind]) { this.emptyReturn = this.modal; s.pause(); this.modal = 'item-empty'; this.changed(); return; }
-            if (kind === 'time' && s.remainingMs !== null) { s.remainingMs += 30000; this.consumeItem('time'); }
-            else if (kind === 'life' && s.lives !== null) { s.lives++; this.consumeItem('life'); }
+            if (kind === 'time' && s.remainingMs !== null) { s.remainingMs = s.level.timeLimitMs; this.consumeItem('time'); }
+            else if (kind === 'life' && s.lives !== null) { s.lives = s.level.lifeLimit; this.consumeItem('life'); }
             else if (kind === 'shuffle') return this.shuffle();
             else this.say(kind === 'time' ? '本关不限时，无需加时' : '本关不限次数，无需补充');
             this.changed(); return;

@@ -28,7 +28,7 @@ test('P1 交叉重叠、重复 ID 与错误头部方向被拒绝', () => {
 });
 test('P1 前期无限次错误不扣生命', () => { const s = new Session(fixtures.blocked); for (let i = 0; i < 100; i++) {
     assert.equal(s.click('a').type, 'blocked');
-    s.tick(201);
+    s.tick(601);
 } assert.equal(s.lives, null); assert.equal(s.state, 'playing'); });
 test('P1 后期有效错误扣一次，反馈期间不重复扣，耗尽锁定', () => {
     const s = new Session({ ...fixtures.blocked, lifeLimit: 3 });
@@ -38,7 +38,7 @@ test('P1 后期有效错误扣一次，反馈期间不重复扣，耗尽锁定',
         for (let j = 0; j < 10; j++)
             s.click('a');
         assert.equal(s.lives, 2 - i);
-        s.tick(201);
+        s.tick(601);
     }
     assert.equal(s.state, 'failed');
     assert.equal(s.click('b').type, 'locked');

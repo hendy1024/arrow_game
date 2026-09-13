@@ -1,7 +1,7 @@
 'use strict';
 const { settings, version } = require('./settings');
 const VERSION = version(settings);
-const ROUNDS = 5;
+const ROUNDS = 3;
 const OFFSET = 8 * 60 * 60 * 1000;
 function period(kind, now = Date.now()) {
     if (!['daily', 'weekly'].includes(kind) || !Number.isFinite(now)) throw Error('Invalid race period');

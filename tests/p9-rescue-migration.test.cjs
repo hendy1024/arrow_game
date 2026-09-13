@@ -15,7 +15,7 @@ test('P9 取消或库存为0不扣道具，超时与竞速不出现容错续关'
 test('P9 旧100关进度一次性重置，库存设置保留、普通旧纪录清除，新进度不重复重置',async()=>{
  const a=new Controller(fakePlatform());a.unlocked=74;a.currentLevel=73;a.inventory.life=27;a.rewardClaims=[5,20];a.settings.sound=false;a.levelBests={'50:123':4567};const old=snapshot(a);delete old.campaignRevision;
  const data=new Map(),storage={get:k=>data.get(k),set:(k,v)=>data.set(k,v)};createStore(storage).save(old);
- const b=new Controller(fakePlatform());bindPersistence(b,storage);assert.equal(b.currentLevel,1);assert.equal(b.unlocked,1);assert.equal(b.session,null);assert.equal(b.inventory.life,27);assert.equal(b.settings.sound,false);assert.deepEqual(b.rewardClaims,[]);assert.deepEqual(b.levelBests,{});assert.equal(createStore(storage).load().data.campaignRevision,3);
+ const b=new Controller(fakePlatform());bindPersistence(b,storage);assert.equal(b.currentLevel,1);assert.equal(b.unlocked,1);assert.equal(b.session,null);assert.equal(b.inventory.life,27);assert.equal(b.settings.sound,false);assert.deepEqual(b.rewardClaims,[]);assert.deepEqual(b.levelBests,{});assert.equal(createStore(storage).load().data.campaignRevision,4);
  b.unlocked=3;b.currentLevel=2;b.changed();const c=new Controller(fakePlatform());bindPersistence(c,storage);assert.equal(c.unlocked,3);assert.equal(c.currentLevel,2);assert.equal(c.inventory.life,27);
 });
 

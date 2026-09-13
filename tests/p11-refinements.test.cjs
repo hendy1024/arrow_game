@@ -2,11 +2,11 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {Controller}=require('../src/ui/controller'),{Session}=require('../src/domain/session'),{fixtures}=require('../src/fixtures'),{fakePlatform,fakeWx}=require('./helpers.cjs'),{snapshot,restore}=require('../src/persistence/store');
 function expired(stock=2){const a=new Controller(fakePlatform());a.lifeIntroDone=true;a.session=new Session({...fixtures.tutorial,number:3,lifeLimit:3,timeLimitMs:100});a.screen='game';a.currentLevel=3;a.inventory.time=stock;a.clickArrow('first');a.tick(100);assert.equal(a.modal,'time-rescue');return a;}
-test('P11 超时可加30秒续关，保留布局/生命/移动进度，不重复扣库存，排除道具纪录',()=>{
+test('P11 超时可重置初始时间续关，保留布局/生命/移动进度，不重复扣库存，排除道具纪录',()=>{
  const a=expired(),s=a.session,level=JSON.stringify(s.level),moves=JSON.stringify([...s.moves]);a.tick(5000);assert.equal(JSON.stringify([...s.moves]),moves);assert.equal(s.remainingMs,0);
- a.action('time-rescue-use');assert.equal(s.state,'playing');assert.equal(s.remainingMs,30000);assert.equal(s.lives,3);assert.equal(a.inventory.time,1);assert.equal(JSON.stringify(s.level),level);assert.equal(s.recordEligible,false);assert.equal(s.itemUses.time,1);a.action('time-rescue-use');assert.equal(a.inventory.time,1);
- const b=new Controller(fakePlatform());restore(b,snapshot(a));assert.equal(b.session.remainingMs,30000);assert.equal(b.inventory.time,1);
- a.tick(30000);assert.equal(a.modal,'time-rescue');a.action('time-rescue-use');assert.equal(a.inventory.time,0);assert.equal(s.remainingMs,30000);
+ a.action('time-rescue-use');assert.equal(s.state,'playing');assert.equal(s.remainingMs,100);assert.equal(s.lives,3);assert.equal(a.inventory.time,1);assert.equal(JSON.stringify(s.level),level);assert.equal(s.recordEligible,false);assert.equal(s.itemUses.time,1);a.action('time-rescue-use');assert.equal(a.inventory.time,1);
+ const b=new Controller(fakePlatform());restore(b,snapshot(a));assert.equal(b.session.remainingMs,100);assert.equal(b.inventory.time,1);
+ a.tick(100);assert.equal(a.modal,'time-rescue');a.action('time-rescue-use');assert.equal(a.inventory.time,0);assert.equal(s.remainingMs,100);
 });
 test('P11 超时放弃、空库存、重载不会补发时间，竞速不出现加时提示',()=>{
  const a=expired(0);a.action('time-rescue-use');assert.equal(a.session.remainingMs,0);assert.equal(a.inventory.time,0);a.action('dismiss-modal');assert.equal(a.modal,'failed');a.syncModal();assert.equal(a.modal,'failed');const b=new Controller(fakePlatform());restore(b,snapshot(a));b.syncModal();assert.equal(b.modal,'failed');

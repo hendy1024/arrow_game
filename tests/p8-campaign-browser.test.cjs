@@ -15,15 +15,15 @@ test('P8 浏览器总览入口、奖励详情、空白关闭、选关和单页�
  await e('__arrowDebug.app.lifeIntroDone=true;__arrowDebug.app.challengeUnlockSeen=true;__arrowDebug.app.modal=null;__arrowDebug.app.session.resume();__arrowDebug.render()');
  shot=await c.send('Page.captureScreenshot',{format:'png'},s);fs.writeFileSync('reports/screenshots/campaign-32.png',Buffer.from(shot.data,'base64'));
  const target=await e('(()=>{const a=__arrowDebug.app.session.level.arrows.find(a=>__arrowDebug.app.session.classify(a.id).type==="blocked"),p=__arrowDebug.view.transform.toScreen(a.path.at(-1)),r=document.querySelector("canvas").getBoundingClientRect();return [r.x+p[0],r.y+p[1]]})()');
- for(let i=0;i<3;i++){for(const type of ['mousePressed','mouseReleased'])await c.send('Input.dispatchMouseEvent',{type,x:target[0],y:target[1],button:'left',clickCount:1},s);await delay(250);}
+ for(let i=0;i<3;i++){for(const type of ['mousePressed','mouseReleased'])await c.send('Input.dispatchMouseEvent',{type,x:target[0],y:target[1],button:'left',clickCount:1},s);await delay(650);}
  assert.equal(await e('__arrowDebug.app.modal'),'life-rescue');
  shot=await c.send('Page.captureScreenshot',{format:'png'},s);fs.writeFileSync('reports/screenshots/life-rescue.png',Buffer.from(shot.data,'base64'));
- const stock=await e('__arrowDebug.app.inventory.life');await click('life-rescue-use');assert.equal(await e('__arrowDebug.app.inventory.life'),stock-1);assert.equal(await e('__arrowDebug.app.session.lives'),1);assert.equal(await e('__arrowDebug.app.modal'),null);
+ const stock=await e('__arrowDebug.app.inventory.life');await click('life-rescue-use');assert.equal(await e('__arrowDebug.app.inventory.life'),stock-1);assert.equal(await e('__arrowDebug.app.session.lives'),3);assert.equal(await e('__arrowDebug.app.modal'),null);
 
  const timeStock=await e('__arrowDebug.app.inventory.time'),board=await e('JSON.stringify(__arrowDebug.app.session.level)');
  await e('__arrowDebug.app.session.remainingMs=1;__arrowDebug.app.tick(1);__arrowDebug.render()');assert.equal(await e('__arrowDebug.app.modal'),'time-rescue');
  shot=await c.send('Page.captureScreenshot',{format:'png'},s);fs.writeFileSync('reports/screenshots/time-rescue.png',Buffer.from(shot.data,'base64'));
- await delay(100);assert.equal(await e('__arrowDebug.app.session.remainingMs'),0);await click('time-rescue-use');assert.equal(await e('__arrowDebug.app.inventory.time'),timeStock-1);assert.equal(await e('JSON.stringify(__arrowDebug.app.session.level)'),board);assert.equal(await e('__arrowDebug.app.session.state'),'playing');assert.ok(await e('__arrowDebug.app.session.remainingMs>29000&&__arrowDebug.app.session.remainingMs<=30000'));
+ await delay(100);assert.equal(await e('__arrowDebug.app.session.remainingMs'),0);await click('time-rescue-use');assert.equal(await e('__arrowDebug.app.inventory.time'),timeStock-1);assert.equal(await e('JSON.stringify(__arrowDebug.app.session.level)'),board);assert.equal(await e('__arrowDebug.app.session.state'),'playing');assert.ok(await e('__arrowDebug.app.session.remainingMs>74000&&__arrowDebug.app.session.remainingMs<=75000'));
  await click('pause');await click('home');await click('level-map');await click('map-level-2');await click('map-play');await delay(100);
  assert.equal(await e('__arrowDebug.app.session.level.width'),25);assert.equal(await e('__arrowDebug.app.session.remainingMs'),120000);await click('challenge-accept');
  shot=await c.send('Page.captureScreenshot',{format:'png'},s);fs.writeFileSync('reports/screenshots/campaign-2-25.png',Buffer.from(shot.data,'base64'));

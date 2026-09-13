@@ -40,17 +40,15 @@
     "obstacles-timer.png",
     "timeout-failed.png",
     "home-challenge-mode.png",
-    "challenge-mode-ready.png",
-    "challenge-mode-playing.png",
     "items-used.png",
-    "challenge-unlocked.png"
+    "challenge-hidden.png"
   ],
   "performance": {
     "medianMs": 16.699999999999932,
-    "p95Ms": 16.700000000000045,
-    "averageMs": 16.664444444444445,
-    "heapBefore": 4209052,
-    "heapAfter": 4494000,
+    "p95Ms": 16.799999999999955,
+    "averageMs": 16.666666666666664,
+    "heapBefore": 4816452,
+    "heapAfter": 4997392,
     "iterations": 200
   },
   "video": "snake-and-parallel.webm"

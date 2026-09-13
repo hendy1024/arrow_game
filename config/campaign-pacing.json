@@ -16,7 +16,7 @@
     "minDepth": 41,
     "maxLength": 16,
     "minAverageLength": 6.055555555555555,
-    "obstacles": 0,
+    "obstacles": 2,
     "timeSeconds": 117
   },
   {

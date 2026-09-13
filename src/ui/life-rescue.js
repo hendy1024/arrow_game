@@ -10,11 +10,13 @@ function action(app, name) {
     }
     if (name !== 'life-rescue-use') return false;
     if (!eligible(app) || app.inventory.life < 1) { app.say('容错道具已用完'); app.changed(); return true; }
-    const s = app.session;
-    app.consumeItem('life'); s.lives = 1; s.failureReason = null; s.state = s.remaining ? 'playing' : 'won';
-    s.feedback.clear(); s.recordEligible = false; s.reviveDeclined = false;
-    app.modal = null;
-    if (s.state === 'won') s.emit('won');
-    app.events(); app.changed(); return true;
+    revive(app,true); return true;
 }
-module.exports = { eligible, action };
+function revive(app,consume) {
+    const s=app.session;
+    if(consume) app.consumeItem('life');
+    s.lives = s.level.lifeLimit; s.failureReason=null; s.state=s.remaining?'playing':'won';
+    s.feedback.clear(); s.recordEligible=false; s.reviveDeclined=false;app.modal=null;
+    if(s.state==='won')s.emit('won');app.events();app.changed();
+}
+module.exports={eligible,action,revive};

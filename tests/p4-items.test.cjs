@@ -7,7 +7,7 @@ const { generate } = require('../src/generation/generator');
 const { solve } = require('../src/generation/validate');
 const { snapshot, restore, createStore } = require('../src/persistence/store');
 const { fakePlatform } = require('./helpers.cjs');
-function make() { return new Controller(fakePlatform(), { generate: async (n, s) => generate(n, s) }); }
+function make() { return new Controller(fakePlatform(), { challengeVisible:true, generate: async (n, s) => generate(n, s) }); }
 test('P4 挑战20关解锁，19关通关提示且确认后不重复', () => {
     const a = make(); a.action('challenge'); assert.equal(a.modal, 'rush-locked'); assert.equal(a.session, null); a.action('rush-notice-close');
     a.session = new Session({ ...fixtures.boundary, number: 19 }); a.screen = 'game'; a.currentLevel = 19; a.unlocked = 19;
@@ -18,11 +18,11 @@ test('P4 挑战20关解锁，19关通关提示且确认后不重复', () => {
 test('P4 道具共用10个库存，连续加时加命持久化、重载不补库存', async () => {
     const a = make(); await a.start(25); a.action('life-accept'); a.session.tick(1000);
     a.action('items'); const before = a.session.remainingMs; a.tick(5000); assert.equal(a.session.remainingMs, before);
-    a.action('item-time'); a.action('item-time'); assert.equal(a.session.remainingMs, before + 60000);
-    a.action('item-life'); a.action('item-life'); assert.equal(a.session.lives, 5);
+    a.action('item-time'); a.action('item-time'); assert.equal(a.session.remainingMs, a.session.level.timeLimitMs);
+    a.action('item-life'); a.action('item-life'); assert.equal(a.session.lives, 3);
     assert.deepEqual(a.inventory, { time: 8, life: 8, shuffle: 10 });
     const values = new Map(), store = createStore({ get: k => values.get(k), set: (k, v) => values.set(k, v) }); store.save(snapshot(a));
-    const b = make(); restore(b, store.load().data); assert.equal(b.session.items.time, 0); assert.equal(b.session.items.life, 0); assert.equal(b.session.lives, 5); assert.deepEqual(b.inventory, a.inventory);
+    const b = make(); restore(b, store.load().data); assert.equal(b.session.items.time, 0); assert.equal(b.session.items.life, 0); assert.equal(b.session.lives, 3); assert.deepEqual(b.inventory, a.inventory);
 });
 test('P4 重排保留剩余数量和资源且可解，重复请求不多扣，重试恢复原关', async () => {
     const a = make(); await a.start(25); a.action('life-accept');

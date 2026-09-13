@@ -9,7 +9,7 @@ function checksum(value) { let n = 2166136261; for (let i = 0; i < value.length;
     n = Math.imul(n, 16777619);
 } return (n >>> 0).toString(16); }
 function snapshot(app) {
-    if (app.mode !== 'campaign' && app.campaignSnapshot) return { ...clone(app.campaignSnapshot), settings: { ...app.settings }, inventory: { ...app.inventory } };
+    if (app.mode !== 'campaign' && app.campaignSnapshot) return { ...clone(app.campaignSnapshot), share: { ...app.share }, settings: { ...app.settings }, inventory: { ...app.inventory } };
     let session = null;
     if (app.session) {
         const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
@@ -22,12 +22,13 @@ function snapshot(app) {
         session.items = { ...s.items }; session.itemUses = { ...s.itemUses };
         session.restartLevel = clone(s.restartLevel);
     }
-    return { campaignRevision: 3, rewardClaims: [...app.rewardClaims], levelBests: { ...app.levelBests }, version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, inventory: { ...app.inventory }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
+    return { share: { ...app.share }, campaignRevision: 4, rewardClaims: [...app.rewardClaims], levelBests: { ...app.levelBests }, version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, inventory: { ...app.inventory }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
 }
 function validProgress(p) { return Number.isInteger(p) && p >= 1 && p < 1000000; }
 function validate(data) {
     if (!data || data.version !== 1 || !validProgress(data.currentLevel) || !validProgress(data.unlocked) || typeof data.tutorialDone !== 'boolean' || typeof data.lifeIntroDone !== 'boolean' || typeof data.settings?.sound !== 'boolean' || typeof data.settings?.vibration !== 'boolean')
         return false;
+    if(data.share && (typeof data.share.day!=='string'||typeof data.share.rewardClaimed!=='boolean'||!Number.isInteger(data.share.rescues)||data.share.rescues<0||data.share.rescues>10))return false;
     if (data.inventory && !['time', 'life', 'shuffle'].every(k => Number.isInteger(data.inventory[k]) && data.inventory[k] >= 0 && data.inventory[k] <= 10000000)) return false;
     if (data.rewardClaims !== undefined && (!Array.isArray(data.rewardClaims) || new Set(data.rewardClaims).size !== data.rewardClaims.length || !data.rewardClaims.every(validProgress))) return false;
     if (data.levelBests !== undefined && (!data.levelBests || typeof data.levelBests !== 'object' || Array.isArray(data.levelBests) || !Object.entries(data.levelBests).every(([k,v]) => /^\d+:\d+$/.test(k) && Number.isFinite(v) && v > 0))) return false;
@@ -100,10 +101,11 @@ function restore(app, data) {
         throw new Error('Invalid saved game');
     for (const key of ['currentLevel', 'unlocked', 'tutorialDone', 'lifeIntroDone'])
         app[key] = data[key];
-    if (data.campaignRevision !== 3) {
-        data = { ...data, campaignRevision: 3, currentLevel: 1, unlocked: 1, session: null, tutorialDone: false, lifeIntroDone: false, challengeUnlockSeen: false, raceUnlockSeen: false, rewardClaims: [], levelBests: {} };
+    if (data.campaignRevision !== 4) {
+        data = { ...data, campaignRevision: 4, currentLevel: 1, unlocked: 1, session: null, tutorialDone: false, lifeIntroDone: false, challengeUnlockSeen: false, raceUnlockSeen: false, rewardClaims: [], levelBests: {} };
         app.currentLevel = app.unlocked = 1; app.tutorialDone = app.lifeIntroDone = false;
     }
+    app.share = data.share ? { ...data.share } : {day:'',rewardClaimed:false,rescues:0};
     app.settings = { ...data.settings, music: typeof data.settings.music === 'boolean' ? data.settings.music : true };
     app.inventory = { ...(data.inventory || { time: 10, life: 10, shuffle: 10 }) };
     app.challengeUnlockSeen = !!data.challengeUnlockSeen;
@@ -132,7 +134,7 @@ function restore(app, data) {
         app.tutorialStep = state.level.number === 1 && !app.tutorialDone ? 1 : 0;
     }
     app.screen = 'home';
-    app.modal = app.unlocked >= 20 && !app.challengeUnlockSeen ? 'rush-unlocked' : null;
+    app.modal = null;
 }
 function bindPersistence(app, storage) {
     const store = createStore(storage);
@@ -149,12 +151,13 @@ function bindPersistence(app, storage) {
     } app.dirty = true; };
     function read() { try {
         const loaded = store.load();
+        if (loaded.data && loaded.data.campaignRevision !== 4) storage.set('arrow-garden.race-history.v1','[]');
         if (loaded.data)
             restore(app, loaded.data);
-        if (loaded.data && loaded.data.campaignRevision !== 3) app.persist();
         readBlocked = false;
         app.retryRead = null;
         app.savedError = false;
+        if (loaded.data && loaded.data.campaignRevision !== 4) app.persist();
         if (loaded.recovered) {
             app.recoveryNotice = '存档异常，已恢复可用进度';
             app.say(app.recoveryNotice, 5000);

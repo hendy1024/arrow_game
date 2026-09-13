@@ -1,34 +1,16 @@
 'use strict';
-const { difficulty, seedFor, VERSION, ROUNDS } = require('./rules');
-const { candidate, acceptable } = require('../generation/generator');
-const { random } = require('../generation/random');
-const { solve } = require('../generation/validate');
-function profile(round, kind = 'weekly') {
-    const d = difficulty(round, kind);
-    return { ...d, minFill: 1, maxFill: 1, maxLength: d.maxLength, maxTurns: 7, maxOpenRatio: 1, maxInitialOpen: d.maxInitialOpen, minArrows: d.minArrows, dense: true };
+const {difficulty,seedFor,VERSION,ROUNDS}=require('./rules');
+const {solve}=require('../generation/validate');
+function profile(round,kind='weekly'){return {...difficulty(round,kind),minFill:1,maxFill:1,maxOpenRatio:1,dense:true};}
+function generateRound(periodKey,round){
+ const kind=periodKey.split(':')[0],p=profile(round,kind),base=require('../../config/campaign-levels.json')[p.campaignLevel-1].board;
+ const days=Math.floor(Date.parse(periodKey.split(':')[1]+'T00:00:00Z')/86400000);if(!Number.isFinite(days))throw Error('Invalid race period');
+ const variant=((kind==='weekly'?Math.floor(days/7):days)+round*3)%8,turns=variant%4,mirror=variant>=4,size=base.width;
+ const point=p=>{let [x,y]=p;if(mirror)x=size-1-x;for(let i=0;i<turns;i++)[x,y]=[size-1-y,x];return [x,y];};
+ const level={...JSON.parse(JSON.stringify(base)),number:round,seed:seedFor(periodKey,round),lifeLimit:null,timeLimitMs:null,raceVersion:VERSION};
+ delete level.campaignConfigured;
+ level.obstacles=base.obstacles.map(point);level.arrows=base.arrows.map(a=>{const path=a.path.map(point),h=path.at(-1),t=path.at(-2),direction=h[0]>t[0]?'right':h[0]<t[0]?'left':h[1]>t[1]?'down':'up';return {...a,path,direction};});
+ if(!solve(level).valid)throw Error('Invalid race course');return level;
 }
-function* courseRoundSteps(periodKey, round, options = {}) {
-    const kind = periodKey.split(':')[0];
-    const p = profile(round, kind), seed = seedFor(periodKey, round), rng = random(seed);
-    for (let attempt = 0; attempt < (options.maxAttempts ?? 64); attempt++) {
-        const level = yield* candidate(3, seed, p, rng);
-        level.number = round; level.lifeLimit = null; level.timeLimitMs = null; level.raceVersion = VERSION;
-        const validation = solve(level);
-        if (validation.valid && acceptable(validation.metrics, p)) return level;
-    }
-    const result = JSON.parse(JSON.stringify((kind === 'daily' ? require('./daily-fallbacks') : require('./fallbacks'))[round - 1]));
-    result.lifeLimit = null; result.seed = seed; result.raceVersion = VERSION;
-    if (!solve(result).valid || !acceptable(solve(result).metrics, p) || result.width !== p.size) throw Error('Invalid race fallback');
-    return result;
-}
-function generateRound(periodKey, round, options) { const task = courseRoundSteps(periodKey, round, options); let r; do { r = task.next(); } while (!r.done); return r.value; }
-async function generateCourse(periodKey) {
-    const levels = [];
-    for (let n = 1; n <= ROUNDS; n++) {
-        const task = courseRoundSteps(periodKey, n); let r, work = 0;
-        do { r = task.next(); if (++work % 20 === 0) await new Promise(resolve => setTimeout(resolve, 0)); } while (!r.done);
-        levels.push(r.value);
-    }
-    return levels;
-}
-module.exports = { profile, generateRound, generateCourse };
+async function generateCourse(periodKey){const result=[];for(let n=1;n<=ROUNDS;n++){result.push(generateRound(periodKey,n));await new Promise(resolve=>setTimeout(resolve,0));}return result;}
+module.exports={profile,generateRound,generateCourse};

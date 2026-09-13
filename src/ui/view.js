@@ -26,6 +26,11 @@ function layout(info) { const width = info.width, height = info.height; const to
 class View {
     constructor(ctx) { this.ctx = ctx; this.buttons = []; this.transform = null; this.lastLayout = null; this.camera = new Viewport(); this.cameraLevel = null; }
     button(id, label, x, y, w, h = 48, primary = false) { const c = this.ctx; rounded(c, x, y, w, h, 14, primary ? COLORS.ink : COLORS.paper, primary ? null : COLORS.line); text(c, label, x + w / 2, y + h / 2, 15, primary ? COLORS.paper : COLORS.ink, 'center', 500); this.buttons.push({ id, label, x, y, width: w, height: h }); }
+    iconButton(id, label, icon, x, y) {
+        rounded(this.ctx, x, y, 44, 44, 12, COLORS.paper, COLORS.line);
+        require('../rendering/ui-icons').drawIcon(this.ctx, icon, x + 5, y + 5, 34, COLORS.ink);
+        this.buttons.push({ id, label, x, y, width: 44, height: 44 });
+    }
     render(app, info) {
         const c = this.ctx, l = layout(info);
         this.lastLayout = l;
@@ -49,31 +54,47 @@ class View {
     }
     home(app, l) {
         const c = this.ctx, w = l.width, usable = l.bottom - l.top;
-        this.button('rank', '排行榜', w - 96, l.top, 80, 44);
-        if (!app.retryRead) this.button('level-map', '关卡总览', 16, l.top, 96, 44);
-        const titleY = l.top + usable * .12;
+        this.button('rank', '排行榜', 16, l.top, 80, 44);
+        if (!app.retryRead) {
+            this.iconButton('share', '分享领道具', 'share', w - 60, l.top);
+            text(c, '分享', w - 68, l.top + 22, 12, COLORS.muted, 'right');
+        }
+        const titleY = l.top + Math.max(80, usable * .12);
         text(c, CONFIG.title, w / 2, titleY, 52, COLORS.ink, 'center', 500);
         text(c, '让每条箭头，找到出口', w / 2, titleY + 43, 14, COLORS.muted, 'center');
-        const size = Math.min(w * .60, usable * .26), x = (w - size) / 2, y = titleY + 78;
-        rounded(c, x - 14, y - 12, size + 28, size + 24, 28, '#e9eddf');
-        drawBoard(c, fixtures.tutorial, { x, y, width: size, height: size });
-        const by = Math.min(l.bottom - 181, Math.max(y + size + 36, l.top + usable * .73));
+        const y = titleY + 78, previewSize = Math.min(w * .60, usable * .26);
+        const by = Math.min(l.bottom - 181, Math.max(y + previewSize + 36, l.top + usable * .73));
+        const size = Math.min(previewSize, by - y - (app.platform.isTrial ? 144 : 120)), x = (w - size) / 2;
+        if (size >= 64) {
+            rounded(c, x - 14, y - 12, size + 28, size + 24, 28, '#e9eddf');
+            drawBoard(c, fixtures.tutorial, { x, y, width: size, height: size });
+        }
+        this.itemBar(app, by - 104, w, true);
+        if (app.platform.isTrial) text(c, '体验版 · 点击道具数量 +1', w / 2, by - 117, 11, COLORS.muted, 'center');
         text(c, '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关 · ' + CONFIG.profiles[profileIndex(app.currentLevel)].name, w / 2, by - 24, 13, COLORS.muted, 'center');
-        const secondaryWidth = (w - 76) / 2;
-        this.button('start', app.session ? '继续闯关' : '开始闯关', 32, by, secondaryWidth, 54, true);
-        if (!app.retryRead) this.button('challenge', app.unlocked >= 20 ? '挑战模式' : '挑战 · 20关解锁', 44 + secondaryWidth, by, secondaryWidth, 54);
-        this.button('settings', '设置', 32, by + 126, secondaryWidth, 44);
-        if (!app.retryRead)
-            this.button('reset-progress-ask', '重置关卡进度', 44 + secondaryWidth, by + 126, secondaryWidth, 44);
-        if (!app.retryRead) this.button('race', app.unlocked >= 6 ? '竞速 · 每日 / 每周' : '竞速 · 通关5关解锁', 32, by + 66, w - 64, 48);
+        const startWidth = Math.min(180, w - 160), startX = (w - startWidth) / 2;
+        this.button('start', app.session ? '继续闯关' : '开始闯关', startX, by, startWidth, 54, true);
+        if (!app.retryRead) {
+            const mapX = startX + startWidth + 8;
+            this.iconButton('level-map', '关卡总览', 'map', mapX, by + 5);
+            text(c, '关卡总览', mapX + 22, by + 63, 10, COLORS.muted, 'center');
+        }
+        this.iconButton('settings', '设置', 'settings', 16, l.bottom - 44);
+        text(c, '设置', 68, l.bottom - 22, 12, COLORS.muted);
+        if (!app.retryRead) {
+            this.iconButton('reset-progress-ask', '重置进度', 'reset', w - 60, l.bottom - 44);
+            text(c, '重置进度', w - 68, l.bottom - 22, 12, COLORS.muted, 'right');
+        }
+        if (!app.retryRead) this.button('race', app.unlocked >= 5 ? '竞速 · 每日 / 每周' : '竞速 · 通关4关解锁', 56, by + 82, w - 112, 44);
         if (app.recoveryNotice && !app.savedError)
             text(c, app.recoveryNotice, w / 2, l.bottom + 3, 11, COLORS.red, 'center');
     }
     game(app, l) {
         const c = this.ctx, w = l.width;
         this.button('pause', 'Ⅱ', 16, l.top, 44, 44);
+        this.button('share','分享',68,l.top,44,44);
         text(c, app.mode === 'race' ? '竞速模式' : app.mode === 'challenge' ? '挑战模式' : '箭间', w / 2, l.top + 15, 17, COLORS.ink, 'center', 500);
-        text(c, app.mode === 'race' ? '第 ' + app.currentLevel + ' / 5 关' : app.mode === 'challenge' ? '20×20 · 4块障碍' : '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
+        text(c, app.mode === 'race' ? '第 ' + app.currentLevel + ' / 3 关' : app.mode === 'challenge' ? '20×20 · 4块障碍' : '第 ' + String(app.currentLevel).padStart(2, '0') + ' 关', w / 2, l.top + 40, 12, COLORS.muted, 'center');
         const s = app.session;
 
         text(c, '剩余箭头', 26, l.top + 80, 12, COLORS.muted);
@@ -101,14 +122,14 @@ class View {
             for (const id of s.moves.keys())
                 colors.set(id, COLORS.green);
             for (const [id, f] of s.feedback) {
-                colors.set(id, COLORS.red);
+                colors.set(id, '#e23b36');
                 colors.set(f.blocker.id, COLORS.red);
-                offsets.set(id, Math.sin((f.until - s.time) / 16) * 2.5);
+                offsets.set(id, Math.sin((f.until - s.time) / 24) * 3.5);
             }
             if (this.cameraLevel !== s.level) { this.camera.reset(); this.cameraLevel = s.level; }
             this.camera.update(l.board);
             c.save(); c.beginPath(); c.rect(l.board.x, l.board.y, l.board.width, l.board.height); c.clip();
-            this.transform = drawBoard(c, s.level, this.camera.boardRect(), { removed: s.removed, paths: s.paths(), colors, offsets, grid: !!app.debugGrid });
+            this.transform = drawBoard(c, s.level, this.camera.boardRect(), { removed: s.removed, paths: s.paths(), colors, offsets, blockers: [...s.feedback.values()].map(f=>f.blocker.cell), grid: !!app.debugGrid });
             c.restore();
             if (app.tutorialStep === 1) {
                 const a = s.level.arrows.find(a => a.id === 'first'), p = this.transform.toScreen(a.path[a.path.length - 1]);
@@ -126,7 +147,7 @@ class View {
             const message = app.message || (app.tutorialStep === 1 ? '点击圈中的箭头，沿方向移出棋盘' : this.camera.zoom > 1 ? '拖动查看棋盘，轻点箭头消除' : '箭头太小？点击放大后操作');
             wrap(c, message, w - 42, 13).forEach((v, i) => text(c, v, w / 2, py + 30 + i * 20, 13, app.message ? COLORS.green : COLORS.muted, 'center'));
             if (app.mode !== 'race') this.itemBar(app, py + 64, w);
-            if (s.level.number >= 3) {
+            if (s.level.width >= 14) {
                 this.button(this.camera.zoom < 3 ? 'zoom-in' : 'zoom-reset', this.camera.zoom === 1 ? '放大' : this.camera.zoom === 2 ? '再放大' : '全图', w - 84, l.top, 68, 44);
             }
         }
@@ -157,7 +178,7 @@ class View {
             case 'items': {
                 const s = app.session;
                 title = '道具'; description = '道具数量跨关卡保存，查看时暂停计时。';
-                actions = [['item-time', s.remainingMs === null ? '加时 · 本关不限时' : '加时30秒 · ' + app.inventory.time], ['item-life', s.lives === null ? '容错 · 本关不限次' : '容错+1 · ' + app.inventory.life], ['item-shuffle', '重排剩余箭头 · ' + app.inventory.shuffle], ['items-done', '返回游戏', true]];
+                actions = [['item-time', s.remainingMs === null ? '加时 · 本关不限时' : '恢复初始时间 · ' + app.inventory.time], ['item-life', s.lives === null ? '容错 · 本关不限次' : '恢复初始容错 · ' + app.inventory.life], ['item-shuffle', '重排剩余箭头 · ' + app.inventory.shuffle], ['items-done', '返回游戏', true]];
                 break;
             }
             case 'shuffling':
@@ -184,19 +205,25 @@ class View {
                 break;
             case 'life-rescue':
                 title = '容错次数用完了';
-                description = app.inventory.life > 0 ? '使用1个容错道具，增加1次机会，继续当前棋盘。剩余道具：' + app.inventory.life : '容错道具库存为0，本局无法续关。';
-                actions = [...(app.inventory.life > 0 ? [['life-rescue-use', '使用道具继续', true]] : []), ['life-rescue-decline', '结束本局']];
+                description = '恢复本关初始容错次数，继续当前棋盘。道具：' + app.inventory.life + '；今日分享续关剩余：' + (10-require('./sharing').quota(app).rescues);
+                actions = [...(app.inventory.life > 0 ? [['life-rescue-use', '使用道具继续', true]] : []), ['share-life','分享恢复容错'], ['life-rescue-decline', '结束本局']];
                 break;
             case 'time-rescue':
                 title = '时间用完了';
-                description = app.inventory.time > 0 ? '使用1个加时道具，增加30秒，继续当前棋盘。剩余道具：' + app.inventory.time : '加时道具库存为0，本局无法续关。';
-                actions = [...(app.inventory.time > 0 ? [['time-rescue-use', '加时30秒继续', true]] : []), ['time-rescue-decline', '结束本局']];
+                description = '恢复本关初始时间，继续当前棋盘。道具：' + app.inventory.time + '；今日分享续关剩余：' + (10-require('./sharing').quota(app).rescues);
+                actions = [...(app.inventory.time > 0 ? [['time-rescue-use', '使用道具恢复时间', true]] : []), ['share-time','分享恢复时间'], ['time-rescue-decline', '结束本局']];
                 break;
             case 'failed':
                 title = '再试一次';
                 description = app.session?.failureReason === 'timeout' ? '时间到了。重新挑战会恢复完整时间和 3 次机会。' : '本次机会已用完。先观察出口，再慢慢解开。';
                 actions = [['restart', '重新挑战', true], ['home', '返回首页']];
                 break;
+            case 'share-reward':
+                title='每日分享奖励'; description=require('./sharing').quota(app).rewardClaimed?'今日奖励已领取。可以继续分享，再次分享不会重复获得道具。':'分享返回可领取加时、容错、重排各5个。每日一次。';
+                if(app.message) description+='\n'+app.message;
+                actions=[['share-start',require('./sharing').quota(app).rewardClaimed?'继续分享':'分享领取',true],['share-close','返回']];break;
+            case 'share-wait':
+                title='分享中';description='从分享界面返回后领取奖励或恢复本局。';actions=[['share-cancel','取消']];break;
             case 'settings':
                 title = '设置';
                 description = '开启操作音效可试听。\n音量随手机媒体音量调整。';
@@ -213,8 +240,8 @@ class View {
                 actions = [['life-accept', '知道了，开始', true]];
                 break;
             case 'challenge-intro':
-                title = ([4, 15].includes(app.currentLevel) && (app.session.level.obstacles || []).length) ? '石块出现了' : '限时挑战';
-                description = app.currentLevel === 15 ? '灰色石块无法消除，会挡住路线。清空全部箭头即可通关。' : '本关限时 ' + Math.round((app.session?.level.timeLimitMs || 0) / 1000) + ' 秒。时间归零或机会用完即失败；暂停和切后台时停止计时。';
+                title = ([3, 15].includes(app.currentLevel) && (app.session.level.obstacles || []).length) ? '石块出现了' : '限时挑战';
+                description = ([3,15].includes(app.currentLevel) && (app.session.level.obstacles || []).length) ? '灰色石块无法消除，会挡住路线。清空全部箭头即可通关。' + (app.session.level.timeLimitMs ? '本关限时' + Math.round(app.session.level.timeLimitMs/1000) + '秒。' : '') : '本关限时 ' + Math.round((app.session?.level.timeLimitMs || 0) / 1000) + ' 秒。时间归零或机会用完即失败；暂停和切后台时停止计时。';
                 actions = [['challenge-accept', '开始挑战', true]];
                 break;
         }
@@ -241,7 +268,7 @@ class View {
             } else this.button(id, label, bx, by, bw, 48, primary);
         });
     }
-    itemBar(app, y, width) {
+    itemBar(app, y, width, readOnly = false) {
         const c = this.ctx, size = (width - 80) / 3;
         for (const [i, kind, label] of [[0, 'time', '加时'], [1, 'life', '容错'], [2, 'shuffle', '重排']]) {
             const x = 28 + i * (size + 12), cx = x + size / 2, cy = y + 19;
@@ -251,6 +278,14 @@ class View {
             else if (kind === 'shuffle') { c.moveTo(cx - 11, cy - 5); c.lineTo(cx + 10, cy - 5); c.lineTo(cx + 5, cy - 10); c.moveTo(cx + 10, cy + 5); c.lineTo(cx - 11, cy + 5); c.lineTo(cx - 6, cy + 10); }
             c.stroke();
             if (kind === 'life') text(c, '♥', cx, cy, 26, COLORS.red, 'center');
+            if (readOnly) {
+                const caption = label + ' × ' + app.inventory[kind];
+                c.font = '13px sans-serif';
+                const fontSize = Math.min(13, 13 * (size - 10) / Math.max(1, c.measureText(caption).width));
+                text(c, caption, cx, y + 45, fontSize, COLORS.ink, 'center');
+                if (app.platform.isTrial && !app.retryRead && !app.savedError) this.buttons.push({ id: 'trial-item-' + kind, x, y, width: size, height: 60, label });
+                continue;
+            }
             text(c, label, cx - 5, y + 45, 13, COLORS.ink, 'center');
             rounded(c, x + size - 24, y + 39, 24, 21, 9, COLORS.ink);
             text(c, app.inventory[kind], x + size - 12, y + 49, 12, COLORS.paper, 'center');

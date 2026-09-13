@@ -4,7 +4,7 @@ function createFeedback(createAudio, vibrate) {
     return { play(kind, settings) {
             if (settings.vibration)
                 try {
-                    vibrate();
+                    vibrate(kind);
                 }
                 catch { }
             if (!settings.sound)

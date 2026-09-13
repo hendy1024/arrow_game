@@ -59,7 +59,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             const before = await evaluate('JSON.stringify(__arrowDebug.app.session.level.arrows)'), id = await evaluate('__arrowDebug.app.session.level.arrows.find(a=>__arrowDebug.app.session.classify(a.id).type==="blocked").id');
             for (let i = 0; i < 3; i++) {
                 await arrow(id);
-                await delay(230);
+                await delay(630);
             }
             await until('__arrowDebug.app.modal==="life-rescue"');
             await capture('life-rescue'); await button('life-rescue-decline');
@@ -73,7 +73,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
         await t.test('浏览器重载恢复扣命后的真实持久化数据', async () => {
             const id = await evaluate('__arrowDebug.app.session.level.arrows.find(a=>__arrowDebug.app.session.classify(a.id).type==="blocked").id');
             await arrow(id);
-            await delay(230);
+            await delay(630);
             assert.equal(await evaluate('__arrowDebug.app.session.lives'), 2);
             const before = await evaluate('JSON.stringify(__arrowDebug.app.session.level)');
             await c.send('Page.reload', {}, s);
@@ -195,23 +195,15 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             assert.equal(await evaluate('__arrowDebug.app.session.lives'), 3);
             report.checks.push('timer-pause-timeout-retry');
         });
-        await t.test('主页实际进入挑战，90秒说明及失败后恢复普通进度', async () => {
+        await t.test('主页隐藏挑战，分享弹窗返回及重载保留普通进度', async () => {
             await button('challenge-accept'); await button('pause'); await button('home');
             const number = await evaluate('__arrowDebug.app.currentLevel');
             await evaluate('__arrowDebug.app.unlocked=20;__arrowDebug.app.challengeUnlockSeen=true;__arrowDebug.app.changed();__arrowDebug.render()'); await capture('home-challenge-mode');
-            await button('challenge'); await until('__arrowDebug.app.modal==="rush-ready"');
-            await capture('challenge-mode-ready');
-            assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'), 90000);
-            assert.equal(await evaluate('__arrowDebug.app.session.level.obstacles.length'), 4);
-            await button('rush-accept'); await capture('challenge-mode-playing');
-            await evaluate('__arrowDebug.app.session.remainingMs=100');
-            await until('__arrowDebug.app.modal==="time-rescue"');
-            await button('time-rescue-decline');
-            await until('__arrowDebug.app.modal==="failed"');
-            await button('home'); assert.equal(await evaluate('__arrowDebug.app.currentLevel'), number);
-            assert.equal(await evaluate('__arrowDebug.app.mode'), 'campaign');
-            await c.send('Page.reload', {}, s); await until('!!window.__arrowDebug');
-            assert.equal(await evaluate('__arrowDebug.app.currentLevel'), number);
+            assert.equal(await evaluate('__arrowDebug.view.buttons.some(b=>b.id==="challenge")'),false);
+            await evaluate('__arrowDebug.app.action("challenge")');assert.equal(await evaluate('__arrowDebug.app.mode'),'campaign');
+            await button('share');assert.equal(await evaluate('__arrowDebug.app.modal'),'share-reward');await button('share-close');
+            assert.equal(await evaluate('__arrowDebug.app.currentLevel'),number);
+            await c.send('Page.reload',{},s);await until('!!window.__arrowDebug');assert.equal(await evaluate('__arrowDebug.app.currentLevel'),number);
             report.checks.push('independent-challenge-mode');
         });
         await t.test('真实点击三种道具，重排剩余数量不变且刷新不补道具', async () => {
@@ -220,21 +212,21 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             const count = await evaluate('__arrowDebug.app.session.remaining'), before = await evaluate('__arrowDebug.app.session.remainingMs');
             await button('item-time'); await button('item-time');
             assert.equal(await evaluate('__arrowDebug.app.inventory.time'), 8);
-            const after = await evaluate('__arrowDebug.app.session.remainingMs'); assert.ok(after > before + 59000 && after <= before + 60000);
-            await button('item-life'); assert.equal(await evaluate('__arrowDebug.app.session.lives'), 4);
+            const after = await evaluate('__arrowDebug.app.session.remainingMs'); assert.ok(after > 179000 && after <= 180000);
+            await button('item-life'); assert.equal(await evaluate('__arrowDebug.app.session.lives'), 3);
             await button('item-shuffle'); await until('__arrowDebug.app.modal===null && __arrowDebug.app.inventory.shuffle===9');
             assert.equal(await evaluate('__arrowDebug.app.session.remaining'), count);
             assert.equal(await evaluate('__arrowDebug.solve(__arrowDebug.app.session.level).valid'), true);
             await capture('items-used');
             await c.send('Page.reload', {}, s); await until('!!window.__arrowDebug');
             assert.equal(await evaluate('__arrowDebug.app.session.items.shuffle'), 0); assert.equal(await evaluate('__arrowDebug.app.inventory.shuffle'), 9);
-            assert.equal(await evaluate('__arrowDebug.app.session.lives'), 4);
+            assert.equal(await evaluate('__arrowDebug.app.session.lives'), 3);
             report.checks.push('items-and-reshuffle-persistence');
         });
-        await t.test('第19关通关实际弹出挑战解锁提示', async () => {
+        await t.test('第19关通关不显示已隐藏的挑战解锁提示', async () => {
             await evaluate("__arrowDebug.fixture('boundary'); __arrowDebug.app.currentLevel=19; __arrowDebug.app.session.level.number=19; __arrowDebug.app.unlocked=19; __arrowDebug.app.challengeUnlockSeen=false; __arrowDebug.render()");
-            await arrow('a'); await until('__arrowDebug.app.modal==="rush-unlocked"');
-            await capture('challenge-unlocked'); await button('rush-notice-close');
+            await arrow('a'); await until('__arrowDebug.app.modal==="won"');
+            await capture('challenge-hidden'); assert.equal(await evaluate('__arrowDebug.view.buttons.some(b=>b.id==="rush-notice-close")'),false);
             assert.equal(await evaluate('__arrowDebug.app.modal'), 'won');
             report.checks.push('challenge-unlock-notice');
         });

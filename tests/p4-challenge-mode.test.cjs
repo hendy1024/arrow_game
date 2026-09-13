@@ -5,7 +5,7 @@ const { Session } = require('../src/domain/session');
 const { generate } = require('../src/generation/generator');
 const { fakePlatform } = require('./helpers.cjs');
 const { bindPersistence, snapshot, createStore } = require('../src/persistence/store');
-function make() { const a = new Controller(fakePlatform(), { generate: async (n, s) => generate(n, s) }); a.unlocked = 20; a.challengeUnlockSeen = true; return a; }
+function make() { const a = new Controller(fakePlatform(), { challengeVisible:true, generate: async (n, s) => generate(n, s) }); a.unlocked = 20; a.challengeUnlockSeen = true; return a; }
 test('P4 挑战90秒高难度，返回与重载均保留普通闯关存档', async () => {
     const values = new Map(), storage = { get: k => values.get(k), set: (k, v) => values.set(k, v) };
     const a = make(); bindPersistence(a, storage);

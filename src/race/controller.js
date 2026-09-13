@@ -69,7 +69,7 @@ function action(app, name) {
     }
     if (name === 'race-notice-close' && app.modal === 'race-unlocked') { app.raceUnlockSeen = true; app.modal = null; if (app.screen === 'game') { app.session.resume(); app.syncModal(); } app.changed(); return handled(); }
     if (name === 'race' && app.screen === 'home' && !app.modal && !app.retryRead) {
-        app.modal = app.unlocked >= 6 ? 'race-menu' : 'race-locked'; app.raceKind = app.raceKind || 'daily'; app.changed(); return handled();
+        app.modal = app.unlocked >= 5 ? 'race-menu' : 'race-locked'; app.raceKind = app.raceKind || 'daily'; app.changed(); return handled();
     }
     if (name === 'race-close' && app.modal?.startsWith('race-') && app.mode !== 'race') { app.platform.closeFriends?.(); app.modal = null; app.changed(); return handled(); }
     if (name === 'race-period' && ['race-menu', 'race-history', 'race-friends'].includes(app.modal)) { app.raceKind = app.raceKind === 'daily' ? 'weekly' : 'daily'; app.historyPage = 0; if (app.modal === 'race-friends') refreshFriends(app); app.changed(); return handled(); }
@@ -78,7 +78,7 @@ function action(app, name) {
     if (name === 'race-page' && (app.modal === 'race-history' || app.modal === 'rank')) { app.historyPage = (app.historyPage || 0) + 1; app.changed(); return handled(); }
     if (name === 'race-friend-page' && (app.modal === 'race-friends' || app.modal === 'rank')) { app.platform.nextFriends?.(); return handled(); }
     if (name === 'race-friends' && app.modal === 'race-menu') { app.modal = 'race-friends'; app.friendPeriod = null; refreshFriends(app); app.changed(); return handled(); }
-    if (['race-start', 'race-daily', 'race-weekly'].includes(name) && app.modal === 'race-menu' && app.unlocked >= 6) {
+    if (['race-start', 'race-daily', 'race-weekly'].includes(name) && app.modal === 'race-menu' && app.unlocked >= 5) {
         if (name !== 'race-start') app.raceKind = name.slice(5);
         app.campaignSnapshot = require('../persistence/store').snapshot(app); app.mode = 'race'; app.session = null; return handled(prepare(app));
     }
@@ -92,8 +92,8 @@ function action(app, name) {
     if (name === 'race-retry-save' && app.modal === 'race-finished') { persistResult(app); app.changed(); return handled(); }
     if ((name === 'restart' && ['restart', 'failed'].includes(app.modal)) || name === 'race-retry' && ['race-error', 'race-finished'].includes(app.modal)) return handled(prepare(app));
     if (name === 'home' && app.modal) {
-        app.token++; const settings = app.settings, inventory = app.inventory; require('../persistence/store').restore(app, app.campaignSnapshot);
-        app.settings = settings; app.inventory = inventory; app.mode = 'campaign'; app.campaignSnapshot = null; app.loading = app.loadError = false; app.message = ''; app.changed(); return handled();
+        app.token++; const settings = app.settings, inventory = app.inventory, share = app.share; require('../persistence/store').restore(app, app.campaignSnapshot);
+        app.settings = settings; app.inventory = inventory; app.share = share; app.mode = 'campaign'; app.campaignSnapshot = null; app.loading = app.loadError = false; app.message = ''; app.changed(); return handled();
     }
     return { handled: false };
 }
