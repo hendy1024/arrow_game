@@ -9,11 +9,12 @@ function checksum(value) { let n = 2166136261; for (let i = 0; i < value.length;
     n = Math.imul(n, 16777619);
 } return (n >>> 0).toString(16); }
 function snapshot(app) {
-    if (app.mode !== 'campaign' && app.campaignSnapshot) return { ...clone(app.campaignSnapshot), share: { ...app.share }, settings: { ...app.settings }, inventory: { ...app.inventory } };
+    if (app.mode !== 'campaign' && app.campaignSnapshot) return { ...clone(app.campaignSnapshot), dailyRewardDay: app.dailyRewardDay, share: { ...app.share }, settings: { ...app.settings }, inventory: { ...app.inventory } };
     let session = null;
     if (app.session) {
         const s = app.session, removed = [...new Set([...s.removed, ...s.moves.keys()])];
         session = { level: clone(s.level), removed, lives: s.lives, state: s.state === 'failed' ? 'failed' : removed.length === s.level.arrows.length ? 'won' : 'playing' };
+        session.guideSeen = !!s.guideSeen;
         session.reviveDeclined = !!s.reviveDeclined;
         session.timeReviveDeclined = !!s.timeReviveDeclined;
         session.recordMs = s.recordMs; session.recordEligible = s.recordEligible && s.moves.size === 0;
@@ -22,12 +23,13 @@ function snapshot(app) {
         session.items = { ...s.items }; session.itemUses = { ...s.itemUses };
         session.restartLevel = clone(s.restartLevel);
     }
-    return { share: { ...app.share }, campaignRevision: 4, rewardClaims: [...app.rewardClaims], levelBests: { ...app.levelBests }, version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, inventory: { ...app.inventory }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
+    return { dailyRewardDay: app.dailyRewardDay, share: { ...app.share }, campaignRevision: 4, rewardClaims: [...app.rewardClaims], levelBests: { ...app.levelBests }, version: 1, currentLevel: app.currentLevel, unlocked: Math.max(app.unlocked, session?.state === 'won' ? session.level.number + 1 : 1), settings: { ...app.settings }, inventory: { ...app.inventory }, tutorialDone: app.tutorialDone, lifeIntroDone: app.lifeIntroDone, challengeUnlockSeen: !!app.challengeUnlockSeen, raceUnlockSeen: !!app.raceUnlockSeen, session };
 }
 function validProgress(p) { return Number.isInteger(p) && p >= 1 && p < 1000000; }
 function validate(data) {
     if (!data || data.version !== 1 || !validProgress(data.currentLevel) || !validProgress(data.unlocked) || typeof data.tutorialDone !== 'boolean' || typeof data.lifeIntroDone !== 'boolean' || typeof data.settings?.sound !== 'boolean' || typeof data.settings?.vibration !== 'boolean')
         return false;
+    if(data.dailyRewardDay !== undefined && typeof data.dailyRewardDay !== 'string')return false;
     if(data.share && (typeof data.share.day!=='string'||typeof data.share.rewardClaimed!=='boolean'||!Number.isInteger(data.share.rescues)||data.share.rescues<0||data.share.rescues>10))return false;
     if (data.inventory && !['time', 'life', 'shuffle'].every(k => Number.isInteger(data.inventory[k]) && data.inventory[k] >= 0 && data.inventory[k] <= 10000000)) return false;
     if (data.rewardClaims !== undefined && (!Array.isArray(data.rewardClaims) || new Set(data.rewardClaims).size !== data.rewardClaims.length || !data.rewardClaims.every(validProgress))) return false;
@@ -35,6 +37,7 @@ function validate(data) {
     if (data.session === null)
         return true;
     const s = data.session;
+    if(s?.guideSeen !== undefined && typeof s.guideSeen !== 'boolean')return false;
     if (s?.recordMs !== undefined && (!Number.isFinite(s.recordMs) || s.recordMs < 0)) return false;
     if (s?.recordEligible !== undefined && typeof s.recordEligible !== 'boolean') return false;
     const items = s?.items || { time: 1, life: 1, shuffle: 1 };
@@ -105,6 +108,7 @@ function restore(app, data) {
         data = { ...data, campaignRevision: 4, currentLevel: 1, unlocked: 1, session: null, tutorialDone: false, lifeIntroDone: false, challengeUnlockSeen: false, raceUnlockSeen: false, rewardClaims: [], levelBests: {} };
         app.currentLevel = app.unlocked = 1; app.tutorialDone = app.lifeIntroDone = false;
     }
+    app.dailyRewardDay = data.dailyRewardDay || '';
     app.share = data.share ? { ...data.share } : {day:'',rewardClaimed:false,rescues:0};
     app.settings = { ...data.settings, music: typeof data.settings.music === 'boolean' ? data.settings.music : true };
     app.inventory = { ...(data.inventory || { time: 10, life: 10, shuffle: 10 }) };
@@ -116,6 +120,7 @@ function restore(app, data) {
     if (data.session) {
         const state = data.session;
         app.session = new Session(state.level);
+        app.session.guideSeen = !!state.guideSeen;
         app.session.removed = new Set(state.removed);
         app.session.lives = state.lives;
         app.session.reviveDeclined = !!state.reviveDeclined;
@@ -131,6 +136,18 @@ function restore(app, data) {
         app.session.items = { ...(state.items || { time: 1, life: 1, shuffle: 1 }) };
         app.session.itemUses = { ...(state.itemUses || Object.fromEntries(Object.entries(app.session.items).map(([k,v]) => [k, 1-v]))) };
         app.session.restartLevel = state.restartLevel ? clone(state.restartLevel) : null;
+        if(state.level.campaignConfigured && require('../campaign/catalog').entry(state.level.number)) {
+            const limit=require('../campaign/catalog').entry(state.level.number).board.timeLimitMs;
+            const elapsed=state.level.timeLimitMs==null?0:Math.max(0,state.level.timeLimitMs-app.session.remainingMs);
+            app.session.level.timeLimitMs=limit;app.session.remainingMs=limit==null?null:Math.max(0,limit-elapsed);
+            if(app.session.restartLevel)app.session.restartLevel.timeLimitMs=limit;
+            if(app.session.remainingMs===0&&app.session.state!=='won'){app.session.state='failed';app.session.failureReason='timeout';}
+            if(app.session.failureReason==='timeout' && (app.session.remainingMs===null||app.session.remainingMs>0)) {
+                app.session.failureReason=app.session.lives===0?'lives':null;
+                app.session.state=app.session.lives===0?'failed':app.session.remaining===0?'won':'paused';
+                app.session.timeReviveDeclined=false;
+            }
+        }
         app.tutorialStep = state.level.number === 1 && !app.tutorialDone ? 1 : 0;
     }
     app.screen = 'home';

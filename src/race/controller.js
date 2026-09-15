@@ -36,7 +36,7 @@ function persistResult(app) {
     catch { app.race.saveError = true; }
     if (app.platform.publishRace && !app.race.saveError) {
         race.publishStatus = '好友成绩同步中';
-        Promise.resolve().then(() => app.platform.publishRace(race.record, history.read(app.platform.storage))).then(sent => { race.publishStatus = sent === false ? '已跨期，仅保存本机成绩' : '好友成绩已同步'; app.dirty = true; }, () => { race.publishStatus = '好友成绩同步失败，可重试'; app.dirty = true; });
+        require('./upload').upload(app,race.record).then(sent => { race.publishStatus = sent === false ? '已跨期，仅保存本机成绩' : '好友成绩已同步'; app.dirty = true; }, e => { race.publishStatus = '本机已保存，回到游戏或打开榜单时自动重试'; console.warn('竞速成绩同步失败',String(e?.errMsg||e?.message||e)); app.dirty = true; });
     }
 }
 function refreshFriends(app) {
@@ -45,6 +45,7 @@ function refreshFriends(app) {
     if (app.friendPeriod !== key) { app.friendPeriod = key; app.platform.showFriends(key); }
 }
 function action(app, name) {
+    if ((name === 'rank' && app.screen === 'home' && !app.modal) || (['rank-refresh','rank-personal','rank-friends','rank-daily','rank-weekly'].includes(name) && app.modal === 'rank')) require('./upload').retry(app);
     const handled = result => ({ handled: true, result });
     if (name === 'rank' && app.screen === 'home' && !app.modal) { app.rankTab = 'friends'; app.modal = 'rank'; app.raceKind = app.raceKind || 'daily'; app.friendPeriod = null; refreshFriends(app); app.changed(); return handled(); }
     if (name === 'rank-authorize' && app.modal === 'rank' && app.rankTab === 'friends') { app.platform.authorizeFriends?.(); return handled(); }
@@ -61,7 +62,7 @@ function action(app, name) {
                 const records = history.read(app.platform.storage).filter(r => r.version === VERSION && r.period === period(app.raceKind || 'daily', now(app)).key).sort((a, b) => a.elapsed - b.elapsed);
                 if (!records.length) { app.historyNotice = '本期暂无成绩'; return; }
                 if (!app.platform.publishRace) { app.historyNotice = '请在微信中同步'; return; }
-                await app.platform.publishRace(records[0]); app.historyNotice = '本期最佳已同步';
+                const sent=await require('./upload').upload(app,records[0]); app.historyNotice = sent===false?'已跨期，仅保存本机成绩':'本期最佳已同步';
             } catch { app.historyNotice = '同步失败，请重试'; }
             finally { app.changed(); }
         };
@@ -83,7 +84,7 @@ function action(app, name) {
         app.campaignSnapshot = require('../persistence/store').snapshot(app); app.mode = 'race'; app.session = null; return handled(prepare(app));
     }
     if (app.mode !== 'race') return { handled: false };
-    if (name === 'items' || name.startsWith('item-') || name.startsWith('reset-progress')) return handled();
+    if (name === 'items' || (name.startsWith('item-') && !['item-shuffle','item-empty-close'].includes(name)) || name.startsWith('reset-progress')) return handled();
     if (name === 'race-accept' && app.modal === 'race-ready') {
         if (period(app.raceKind, now(app)).key !== app.race.event.key) return handled(prepare(app));
         app.race.startedAt = now(app); startRound(app); return handled();

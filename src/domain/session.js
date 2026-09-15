@@ -9,11 +9,13 @@ class Session {
             throw new Error('Invalid level: ' + result.errors.join(','));
         this.level = clone(level);
         this.restartLevel = null;
+        this.guideSeen = false;
         this.items = { time: 1, life: 1, shuffle: 1 };
         this.itemUses = { time: 0, life: 0, shuffle: 0 };
         this.removed = new Set();
         this.moves = new Map();
         this.feedback = new Map();
+        this.doorEffects=new Map();
         this.lives = level.lifeLimit;
         this.state = 'playing';
         this.time = 0;
@@ -38,7 +40,7 @@ class Session {
         if ((this.feedback.get(id)?.until || 0) > this.time)
             return { type: 'feedback' };
         const excluded = new Set([...this.removed, ...this.moves.keys()]);
-        const occupied = occupancy(this.level, excluded);
+        const occupied = occupancy(this.level, excluded, this.removed);
         for (const [movingId, move] of this.moves) {
             const movingArrow = this.level.arrows.find(a => a.id === movingId);
             for (const cell of occupiedByBody(movingArrow, move.distance, this.level))
@@ -46,7 +48,7 @@ class Session {
         }
         const blocker = firstBlocker(arrow, this.level, occupied);
         if (blocker)
-            return { type: this.moves.has(blocker.id) ? 'temporary' : 'blocked', blocker, arrow };
+            return { type: (this.moves.has(blocker.id) || (blocker.id.startsWith('@door:') && require('./doors').isOpen(this.level.doors.find(d=>'@door:'+d.id===blocker.id),this.level,excluded))) ? 'temporary' : 'blocked', blocker, arrow };
         const ray = new Set(exitCells(arrow, this.level).map(key));
         for (const movingId of this.moves.keys()) {
             const other = this.level.arrows.find(a => a.id === movingId);
@@ -79,7 +81,9 @@ class Session {
         if (!this.moves.has(id) || this.removed.has(id))
             return false;
         this.moves.delete(id);
+        const closed=(this.level.doors||[]).filter(d=>!require('./doors').isOpen(d,this.level,this.removed));
         this.removed.add(id);
+        for(const d of closed)if(require('./doors').isOpen(d,this.level,this.removed)){this.doorEffects.set(d.id,{until:this.time+900});this.emit('door-opened',{id:d.id});}
         this.emit('removed', { id, remaining: this.remaining });
         if (this.remaining === 0 && this.state !== 'failed' && this.state !== 'won') {
             this.state = 'won';
@@ -103,6 +107,7 @@ class Session {
             if (this.remainingMs === 0) { this.state = 'failed'; this.failureReason = 'timeout'; this.emit('failed', { reason: 'timeout' }); }
         }
         this.time += ms;
+        for(const [id,f] of this.doorEffects)if(f.until<=this.time)this.doorEffects.delete(id);
         for (const [id, f] of this.feedback)
             if (f.until <= this.time)
                 this.feedback.delete(id);

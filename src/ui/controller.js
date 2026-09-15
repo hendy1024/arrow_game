@@ -13,6 +13,7 @@ class Controller {
         this.session = null;
         this.currentLevel = 1;
         this.unlocked = 1;
+        this.dailyRewardDay = '';
         this.share = { day: '', rewardClaimed: false, rescues: 0 };
         this.settings = { music: true, sound: true, vibration: true };
         this.inventory = { time: 10, life: 10, shuffle: 10 };
@@ -84,11 +85,13 @@ class Controller {
         }
         else
             this.modal = null;
-        if (!this.modal && (this.session.level.campaignConfigured ? ((this.session.level.timeLimitMs != null && this.session.level.number === 2) || ((this.session.level.obstacles || []).length && this.session.level.number === 3)) : [15, 20].includes(this.session.level.number))) {
+        if(!this.modal&&this.session.level.guide&&!this.session.guideSeen){this.session.pause();this.modal='mechanic-intro';return;}
+        if (!this.modal && (this.session.level.campaignConfigured ? ((this.session.level.timeLimitMs != null && this.session.level.number === 1) || ((this.session.level.obstacles || []).length && this.session.level.number === 4)) : [15, 20].includes(this.session.level.number))) {
             this.session.pause(); this.modal = 'challenge-intro';
         }
     }
     syncModal() {
+        if (this.modal === 'reward-items' && this.rewardPopup) return;
         if (this.mode === 'race') { require('../race/controller').sync(this); return; }
         if (this.challengeVisible && this.mode === 'campaign' && this.unlocked >= 20 && !this.challengeUnlockSeen) { this.session.pause(); this.modal = 'rush-unlocked'; return; }
         if (this.sharePending) return;
@@ -102,6 +105,7 @@ class Controller {
             this.session.pause();
             this.modal = 'life-intro';
         }
+        else if(this.session.level.guide&&!this.session.guideSeen){this.session.pause();this.modal='mechanic-intro';}
         else
             this.modal = null;
     }
@@ -113,6 +117,7 @@ class Controller {
             return { type: 'tutorial' };
         }
         const result = this.session.click(id);
+        if (result.type === 'allowed') this.session.hintUntil = 0;
         if (result.type === 'temporary')
             this.say('通道正在腾空，请稍候');
         if (result.type === 'allowed' && this.tutorialStep === 1) {
@@ -130,6 +135,7 @@ class Controller {
             return;
         if (this.mode === 'campaign' && this.session.state === 'won') require('../campaign/catalog').completed(this);
         for (const event of this.session.drainEvents()) {
+            if(event.type==='door-opened'){this.say('闸门打开了，新的出口已畅通',3000);this.platform.feedback('won',{...this.settings,vibration:false});}
             if (event.type === 'blocked') {
                 this.say(this.session.lives === null ? '前方有阻挡' : '前方有阻挡，机会 −1');
                 this.platform.feedback('blocked', this.settings);
@@ -140,7 +146,10 @@ class Controller {
                 if (this.mode === 'campaign') {
                     const previous = this.unlocked;
                     this.unlocked = Math.max(this.unlocked, this.session.level.number + 1);
-                    if (previous < 5 && this.unlocked >= 5 && !this.raceUnlockSeen) this.modal = 'race-unlocked';
+                    if (previous < 5 && this.unlocked >= 5 && !this.raceUnlockSeen) {
+                        if (this.modal === 'reward-items' && this.rewardPopup) this.rewardPopup.returnModal = 'race-unlocked';
+                        else this.modal = 'race-unlocked';
+                    }
                 }
                 this.platform.feedback('won', this.settings);
             }
@@ -152,6 +161,7 @@ class Controller {
     }
     tick(ms) {
         require('../race/controller').refreshFriends(this);
+        const today=require('./rewards').day(this);if(this.rewardDisplayDay!==today){this.rewardDisplayDay=today;this.dirty=true;}
         if (!this.sharePending && this.screen === 'game' && this.session && !this.loading && !['life-rescue', 'time-rescue'].includes(this.modal)) {
             if (this.mode === 'campaign' && this.session.state === 'playing') this.session.recordMs += require('../campaign/catalog').activeMs(this.session, ms);
             this.session.tick(ms);
@@ -166,7 +176,16 @@ class Controller {
         }
     }
     action(name) {
+        if (require('./rewards').action(this,name)) return;
         if (require('./sharing').action(this,name)) return;
+        if (name.startsWith('home-info-')) {
+            const kind = name.slice(10);
+            if(this.screen==='home'&&!this.modal&&!this.loading&&!this.retryRead&&['time','life','shuffle'].includes(kind)) {
+                this.itemInfoKind=kind;this.modal='item-info';this.changed();
+            }
+            return;
+        }
+        if(name==='item-info-close'&&this.modal==='item-info'){this.modal=null;this.changed();return;}
         if (name.startsWith('trial-item-')) {
             const kind = name.slice(11);
             if (this.platform.isTrial === true && this.screen === 'home' && !this.modal && !this.loading && !this.retryRead && !this.savedError && ['time', 'life', 'shuffle'].includes(kind) && this.inventory[kind] < 10000000) {
@@ -204,7 +223,7 @@ class Controller {
             if (!this.inventory[kind]) { this.emptyReturn = this.modal; s.pause(); this.modal = 'item-empty'; this.changed(); return; }
             if (kind === 'time' && s.remainingMs !== null) { s.remainingMs = s.level.timeLimitMs; this.consumeItem('time'); }
             else if (kind === 'life' && s.lives !== null) { s.lives = s.level.lifeLimit; this.consumeItem('life'); }
-            else if (kind === 'shuffle') return this.shuffle();
+            else if (kind === 'shuffle') return require('./hint').use(this);
             else this.say(kind === 'time' ? '本关不限时，无需加时' : '本关不限次数，无需补充');
             this.changed(); return;
         }
@@ -229,6 +248,7 @@ class Controller {
             this.session = null;
             return this.start();
         }
+        if(name==='mechanic-accept'&&this.modal==='mechanic-intro'){this.session.guideSeen=true;this.modal=null;this.session.resume();this.say(this.session.level.guide.hint,15000);this.changed();return;}
         if (name === 'start' && this.screen === 'home' && !this.modal)
             return this.start();
         if (name === 'pause' && this.screen === 'game' && !this.modal && !this.loading && this.session?.state === 'playing') {
@@ -255,13 +275,13 @@ class Controller {
         }
         else if (name === 'vibration' && this.modal === 'settings')
             this.settings.vibration = !this.settings.vibration;
-        else if (name === 'reset-progress-ask' && this.mode === 'campaign' && this.screen === 'home' && !this.modal && !this.retryRead) {
+        else if (name === 'reset-progress-ask' && this.platform.isTrial === true && this.mode === 'campaign' && this.screen === 'home' && !this.modal && !this.retryRead) {
             this.resetReturn = this.modal;
             this.modal = 'reset-progress';
         }
         else if (name === 'reset-progress-cancel' && this.modal === 'reset-progress')
             this.modal = this.resetReturn || null;
-        else if (name === 'reset-progress-confirm' && this.modal === 'reset-progress') {
+        else if (name === 'reset-progress-confirm' && this.platform.isTrial === true && this.modal === 'reset-progress') {
             this.token++;
             this.platform.stopFeedback?.();
             this.session = null;
@@ -290,6 +310,7 @@ class Controller {
             this.lifeIntroDone = true;
             this.modal = null;
             this.session.resume();
+            if(this.session.level.guide)this.configureIntro();
         }
         else if (name === 'challenge-accept' && this.modal === 'challenge-intro') {
             this.modal = null;

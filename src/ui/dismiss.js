@@ -1,6 +1,6 @@
 'use strict';
 function dismiss(app) {
-    const targets = { 'share-reward':'share-close', 'share-wait':'share-cancel',
+    const targets = { 'mechanic-intro':'mechanic-accept', 'reward-items':'reward-close', 'item-info':'item-info-close', 'share-reward':'share-close', 'share-wait':'share-cancel',
         'time-rescue': 'time-rescue-decline',
         'life-rescue': 'life-rescue-decline', 'level-detail': 'map-detail-close', pause: 'resume', settings: 'settings-done', restart: 'restart-cancel', 'reset-progress': 'reset-progress-cancel',
         'life-intro': 'life-accept', 'challenge-intro': 'challenge-accept', 'rush-ready': 'home',

@@ -41,7 +41,7 @@ function createRaceWechat(wx) {
             if (record.version !== VERSION || period(record.kind).key !== record.period) return false;
             const key = 'arrow-race-' + record.kind + '-v' + VERSION;
             const previous = wx.getStorageSync(key);
-            const best = previous?.period === record.period && previous.elapsed < record.elapsed ? previous : record;
+            const best = previous?.period === record.period && previous.version === VERSION && Number.isFinite(previous.elapsed) && previous.elapsed > 0 && previous.elapsed < record.elapsed ? previous : record;
             wx.setStorageSync(key, best);
             await new Promise((resolve, reject) => wx.setUserCloudStorage({ KVDataList: [{ key, value: JSON.stringify({ period: best.period, elapsed: best.elapsed, version: VERSION }) }], success: resolve, fail: reject }));
             return true;

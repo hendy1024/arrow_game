@@ -31,10 +31,11 @@ function mount(platform, options = {}) {
             render();
         } }, cancel: () => { pointer.cancel(); drag = null; }, hide: () => { if(app.sharePending)app.sharePending.departed=true; if (app.mode === 'campaign' && app.session?.moves.size) app.session.recordEligible = false; hidden = true; app.audioHidden = true; platform.setMusic?.(false); pointer.cancel(); drag = null; platform.cancelFrame(frameId); last = null; if (app.session && app.mode !== 'race' && !app.sharePending)
             for (const id of [...app.session.moves.keys()])
-                app.session.complete(id); app.events(); app.session?.pause(); app.persist?.(); platform.stopFeedback?.(); }, show: () => { require('./ui/sharing').returned(app); if (!hidden)
+            app.session.complete(id); app.events(); app.session?.pause(); app.persist?.(); platform.stopFeedback?.(); }, show: () => { require('./ui/sharing').returned(app); require('./race/upload').retry(app); if (!hidden)
             return; hidden = false; app.audioHidden = false; platform.setMusic?.(app.settings.music !== false); last = null; if (app.session?.state === 'paused' && !app.modal)
             app.session.resume(); frameId = platform.requestFrame(frame); }, resize: () => { pointer.cancel(); render(); } });
     platform.setMusic?.(app.settings.music !== false);
+    require('./race/upload').retry(app);
     render();
     frameId = platform.requestFrame(frame);
     return { app, view, render, stop() { hidden = true; platform.cancelFrame(frameId); platform.destroy?.(); } };

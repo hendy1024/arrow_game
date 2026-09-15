@@ -14,7 +14,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
     } throw new Error('Condition timed out: ' + expression + ' ' + await evaluate('JSON.stringify({modal:__arrowDebug.app.modal,loading:__arrowDebug.app.loading,error:__arrowDebug.app.loadError,screen:__arrowDebug.app.screen})')); }
     async function capture(name) { const { data } = await c.send('Page.captureScreenshot', { format: 'png' }, s); fs.writeFileSync(path.join(dir, name + '.png'), Buffer.from(data, 'base64')); report.screenshots.push(name + '.png'); }
     async function mouse(x, y) { await c.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, s); await c.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, s); }
-    async function button(id) { const p = await evaluate(`(()=>{const b=__arrowDebug.view.buttons.find(b=>b.id===${JSON.stringify(id)});if(!b)throw Error('Missing button');const r=document.querySelector('canvas').getBoundingClientRect();return [r.x+b.x+b.width/2,r.y+b.y+b.height/2];})()`); await mouse(...p); }
+    async function button(id) { await until(`__arrowDebug.view.buttons.some(b=>b.id===${JSON.stringify(id)})`); const p = await evaluate(`(()=>{const b=__arrowDebug.view.buttons.find(b=>b.id===${JSON.stringify(id)});if(!b)throw Error('Missing button');const r=document.querySelector('canvas').getBoundingClientRect();return [r.x+b.x+b.width/2,r.y+b.y+b.height/2];})()`); await mouse(...p); }
     async function arrow(id) { const p = await evaluate(`(()=>{const g=__arrowDebug,a=g.app.session.level.arrows.find(a=>a.id===${JSON.stringify(id)}),p=g.view.transform.toScreen(a.path.at(-1)),r=document.querySelector('canvas').getBoundingClientRect();return [r.x+p[0],r.y+p[1]];})()`); await mouse(...p); }
     async function atFrame(fn) {
         await evaluate('window.testTick=__arrowDebug.app.tick; __arrowDebug.app.tick=function(){}');
@@ -24,7 +24,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
         await c.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, s);
         await c.send('Page.navigate', { url: b.url + '/?debug' }, s);
         await until('!!window.__arrowDebug');
-        await t.test('首页实际渲染，开始按钮接收真实指针事件', async () => { assert.equal(await evaluate('__arrowDebug.app.screen'), 'home'); await capture('home'); await button('start'); await until('__arrowDebug.app.session && !__arrowDebug.app.loading'); assert.equal(await evaluate('__arrowDebug.app.tutorialStep'), 1); await capture('tutorial'); report.checks.push('home-start'); });
+        await t.test('首页实际渲染，开始按钮接收真实指针事件', async () => { assert.equal(await evaluate('__arrowDebug.app.screen'), 'home'); await capture('home'); await button('start'); await until('__arrowDebug.app.session && !__arrowDebug.app.loading');if(await evaluate('__arrowDebug.app.modal==="mechanic-intro"'))await button('mechanic-accept'); assert.equal(await evaluate('__arrowDebug.app.tutorialStep'), 1); await capture('tutorial'); report.checks.push('home-start'); });
         await t.test('折线实际跟随动画并通关，计数在尾部出界后变化', async () => {
             await atFrame(async () => {
                 await arrow('first');
@@ -47,7 +47,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             await until('__arrowDebug.app.currentLevel===2 && !__arrowDebug.app.loading');
             assert.equal(await evaluate('__arrowDebug.app.modal'),'life-intro');
             assert.equal(await evaluate('__arrowDebug.app.session.level.width'),25);
-            assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'),120000);
+            assert.equal(await evaluate('__arrowDebug.app.session.remainingMs'),300000);
             await button('life-accept');
             report.checks.push('snake-and-win');
         });
@@ -164,7 +164,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             assert.equal(await evaluate('__arrowDebug.app.currentLevel'), 3);
             await button('settings-done'); await button('home');
             await capture('home-reset');
-            await button('reset-progress-ask'); await button('reset-progress-cancel');
+            await evaluate('__arrowDebug.app.platform.isTrial=true;__arrowDebug.render()'); await button('reset-progress-ask'); await button('reset-progress-cancel');
             assert.equal(await evaluate('__arrowDebug.app.modal'), null);
             assert.equal(await evaluate('__arrowDebug.app.currentLevel'), 3);
             await button('reset-progress-ask'); await capture('reset-confirm');
@@ -173,7 +173,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
             await c.send('Page.reload', {}, s); await until('!!window.__arrowDebug');
             assert.equal(await evaluate('__arrowDebug.app.currentLevel'), 1);
             assert.equal(await evaluate('__arrowDebug.app.unlocked'), 1);
-            await button('start'); await until('__arrowDebug.app.tutorialStep===1');
+            await button('start'); await until('__arrowDebug.app.tutorialStep===1');if(await evaluate('__arrowDebug.app.modal==="mechanic-intro"'))await button('mechanic-accept');
             report.checks.push('reset-progress-persistence');
         });
         await t.test('限时说明与暂停冻结，真实超时失败及重试恢复', async () => {
@@ -225,7 +225,7 @@ test('P6 真实 Edge 画布、输入、动画、存档及屏幕验收', { timeou
         });
         await t.test('第19关通关不显示已隐藏的挑战解锁提示', async () => {
             await evaluate("__arrowDebug.fixture('boundary'); __arrowDebug.app.currentLevel=19; __arrowDebug.app.session.level.number=19; __arrowDebug.app.unlocked=19; __arrowDebug.app.challengeUnlockSeen=false; __arrowDebug.render()");
-            await arrow('a'); await until('__arrowDebug.app.modal==="won"');
+            await arrow('a'); await until('__arrowDebug.app.modal==="reward-items"');await capture('campaign-reward-items');await button('reward-close');await until('__arrowDebug.app.modal==="won"');
             await capture('challenge-hidden'); assert.equal(await evaluate('__arrowDebug.view.buttons.some(b=>b.id==="rush-notice-close")'),false);
             assert.equal(await evaluate('__arrowDebug.app.modal'), 'won');
             report.checks.push('challenge-unlock-notice');

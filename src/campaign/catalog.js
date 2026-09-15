@@ -1,10 +1,10 @@
 'use strict';
 const levels = require('../../config/campaign-levels.json');
-const names = { time: '加时', life: '容错', shuffle: '重排' };
+const names = { time: '加时', life: '容错', shuffle: '提示' };
 function entry(number) { return levels[number - 1]; }
 function key(board) {
     let n = 2166136261;
-    const value = JSON.stringify([board.number, board.width, board.height, board.arrows, board.obstacles || [], board.lifeLimit, board.timeLimitMs ?? null]);
+    const value = JSON.stringify([board.number, board.width, board.height, board.arrows, board.obstacles || [], board.doors || [], board.lifeLimit, board.timeLimitMs ?? null]);
     for (const c of value) { n ^= c.charCodeAt(0); n = Math.imul(n, 16777619); }
     return board.number + ':' + (n >>> 0);
 }
@@ -20,8 +20,8 @@ function completed(app) {
     const s = app.session, row = entry(s.level.number);
     if (!row) return;
     if (!app.rewardClaims.includes(row.id)) {
-        for (const [kind, count] of Object.entries(row.rewards)) app.inventory[kind] += count;
         app.rewardClaims.push(row.id);
+        if(Object.keys(row.rewards).length) require('../ui/rewards').grant(app,row.rewards,'通关奖励','won');
         app.rewardNotice = Object.keys(row.rewards).length ? '首次通关奖励：' + rewardText(row.id) : '';
     }
     if (s.recordEligible && s.recordMs > 0 && Object.values(s.itemUses).every(n => n === 0) && key(s.level) === key(row.board)) {

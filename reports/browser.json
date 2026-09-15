@@ -41,14 +41,15 @@
     "timeout-failed.png",
     "home-challenge-mode.png",
     "items-used.png",
+    "campaign-reward-items.png",
     "challenge-hidden.png"
   ],
   "performance": {
     "medianMs": 16.699999999999932,
     "p95Ms": 16.799999999999955,
-    "averageMs": 16.666666666666664,
-    "heapBefore": 4816452,
-    "heapAfter": 4997392,
+    "averageMs": 16.66555555555556,
+    "heapBefore": 8102476,
+    "heapAfter": 8240204,
     "iterations": 200
   },
   "video": "snake-and-parallel.webm"

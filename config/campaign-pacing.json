@@ -7,7 +7,7 @@
     "maxLength": 16,
     "minAverageLength": 6,
     "obstacles": 0,
-    "timeSeconds": 120
+    "timeSeconds": 300
   },
   {
     "from": 3,
@@ -16,18 +16,20 @@
     "minDepth": 41,
     "maxLength": 16,
     "minAverageLength": 6.055555555555555,
-    "obstacles": 2,
-    "timeSeconds": 117
+    "obstacles": 0,
+    "timeSeconds": 300
   },
   {
     "from": 4,
     "to": 4,
-    "size": 26,
-    "minDepth": 42,
-    "maxLength": 17,
-    "minAverageLength": 6.111111111111111,
+    "minDepth": 8,
+    "maxLength": 18,
+    "minAverageLength": 4,
     "obstacles": 4,
-    "timeSeconds": 114
+    "timeSeconds": 300,
+    "tutorial": true,
+    "width": 14,
+    "height": 16
   },
   {
     "from": 5,
@@ -36,8 +38,8 @@
     "minDepth": 43,
     "maxLength": 17,
     "minAverageLength": 6.166666666666667,
-    "obstacles": 4,
-    "timeSeconds": 111
+    "obstacles": 5,
+    "timeSeconds": 300
   },
   {
     "from": 6,
@@ -46,8 +48,8 @@
     "minDepth": 44,
     "maxLength": 18,
     "minAverageLength": 6.222222222222222,
-    "obstacles": 5,
-    "timeSeconds": 108
+    "obstacles": 6,
+    "timeSeconds": 300
   },
   {
     "from": 7,
@@ -56,18 +58,20 @@
     "minDepth": 46,
     "maxLength": 18,
     "minAverageLength": 6.277777777777778,
-    "obstacles": 5,
-    "timeSeconds": 105
+    "obstacles": 7,
+    "timeSeconds": 300
   },
   {
     "from": 8,
     "to": 8,
-    "size": 27,
-    "minDepth": 47,
-    "maxLength": 19,
-    "minAverageLength": 6.333333333333333,
-    "obstacles": 6,
-    "timeSeconds": 103
+    "minDepth": 14,
+    "maxLength": 18,
+    "minAverageLength": 4,
+    "obstacles": 8,
+    "timeSeconds": 300,
+    "tutorial": true,
+    "width": 18,
+    "height": 20
   },
   {
     "from": 9,
@@ -76,8 +80,8 @@
     "minDepth": 48,
     "maxLength": 19,
     "minAverageLength": 6.388888888888889,
-    "obstacles": 7,
-    "timeSeconds": 100
+    "obstacles": 9,
+    "timeSeconds": 300
   },
   {
     "from": 10,
@@ -86,8 +90,8 @@
     "minDepth": 49,
     "maxLength": 20,
     "minAverageLength": 6.444444444444445,
-    "obstacles": 7,
-    "timeSeconds": 97
+    "obstacles": 10,
+    "timeSeconds": 300
   },
   {
     "from": 11,
@@ -96,18 +100,20 @@
     "minDepth": 51,
     "maxLength": 20,
     "minAverageLength": 6.5,
-    "obstacles": 8,
-    "timeSeconds": 95
+    "obstacles": 11,
+    "timeSeconds": 296
   },
   {
     "from": 12,
     "to": 12,
-    "size": 29,
-    "minDepth": 52,
-    "maxLength": 21,
-    "minAverageLength": 6.555555555555555,
-    "obstacles": 9,
-    "timeSeconds": 92
+    "minDepth": 20,
+    "maxLength": 18,
+    "minAverageLength": 4,
+    "obstacles": 12,
+    "timeSeconds": 292,
+    "tutorial": true,
+    "width": 20,
+    "height": 22
   },
   {
     "from": 13,
@@ -116,8 +122,8 @@
     "minDepth": 53,
     "maxLength": 22,
     "minAverageLength": 6.611111111111111,
-    "obstacles": 10,
-    "timeSeconds": 90
+    "obstacles": 13,
+    "timeSeconds": 288
   },
   {
     "from": 14,
@@ -126,8 +132,8 @@
     "minDepth": 55,
     "maxLength": 22,
     "minAverageLength": 6.666666666666667,
-    "obstacles": 11,
-    "timeSeconds": 88
+    "obstacles": 14,
+    "timeSeconds": 284
   },
   {
     "from": 15,
@@ -136,8 +142,8 @@
     "minDepth": 56,
     "maxLength": 23,
     "minAverageLength": 6.722222222222222,
-    "obstacles": 12,
-    "timeSeconds": 85
+    "obstacles": 15,
+    "timeSeconds": 280
   },
   {
     "from": 16,
@@ -146,8 +152,8 @@
     "minDepth": 58,
     "maxLength": 23,
     "minAverageLength": 6.777777777777778,
-    "obstacles": 13,
-    "timeSeconds": 83
+    "obstacles": 16,
+    "timeSeconds": 276
   },
   {
     "from": 17,
@@ -156,8 +162,8 @@
     "minDepth": 59,
     "maxLength": 24,
     "minAverageLength": 6.833333333333333,
-    "obstacles": 15,
-    "timeSeconds": 81
+    "obstacles": 17,
+    "timeSeconds": 272
   },
   {
     "from": 18,
@@ -166,8 +172,8 @@
     "minDepth": 61,
     "maxLength": 25,
     "minAverageLength": 6.888888888888889,
-    "obstacles": 16,
-    "timeSeconds": 79
+    "obstacles": 18,
+    "timeSeconds": 268
   },
   {
     "from": 19,
@@ -176,8 +182,8 @@
     "minDepth": 62,
     "maxLength": 25,
     "minAverageLength": 6.944444444444445,
-    "obstacles": 18,
-    "timeSeconds": 77
+    "obstacles": 19,
+    "timeSeconds": 264
   },
   {
     "from": 20,
@@ -187,6 +193,226 @@
     "maxLength": 26,
     "minAverageLength": 7,
     "obstacles": 20,
-    "timeSeconds": 75
+    "timeSeconds": 260
+  },
+  {
+    "from": 21,
+    "to": 21,
+    "width": 30,
+    "height": 36,
+    "minDepth": 65,
+    "maxLength": 27,
+    "minAverageLength": 7.2,
+    "obstacles": 21,
+    "timeSeconds": 256
+  },
+  {
+    "from": 22,
+    "to": 22,
+    "width": 30,
+    "height": 36,
+    "minDepth": 66,
+    "maxLength": 27,
+    "minAverageLength": 7.242105263157895,
+    "obstacles": 22,
+    "timeSeconds": 252
+  },
+  {
+    "from": 23,
+    "to": 23,
+    "width": 30,
+    "height": 36,
+    "minDepth": 67,
+    "maxLength": 28,
+    "minAverageLength": 7.28421052631579,
+    "obstacles": 23,
+    "timeSeconds": 248
+  },
+  {
+    "from": 24,
+    "to": 24,
+    "width": 30,
+    "height": 37,
+    "minDepth": 67,
+    "maxLength": 28,
+    "minAverageLength": 7.326315789473685,
+    "obstacles": 24,
+    "timeSeconds": 244
+  },
+  {
+    "from": 25,
+    "to": 25,
+    "width": 30,
+    "height": 37,
+    "minDepth": 68,
+    "maxLength": 28,
+    "minAverageLength": 7.368421052631579,
+    "obstacles": 25,
+    "timeSeconds": 240
+  },
+  {
+    "from": 26,
+    "to": 26,
+    "width": 31,
+    "height": 37,
+    "minDepth": 69,
+    "maxLength": 28,
+    "minAverageLength": 7.410526315789474,
+    "obstacles": 26,
+    "timeSeconds": 236
+  },
+  {
+    "from": 27,
+    "to": 27,
+    "width": 31,
+    "height": 37,
+    "minDepth": 70,
+    "maxLength": 29,
+    "minAverageLength": 7.4526315789473685,
+    "obstacles": 27,
+    "timeSeconds": 232
+  },
+  {
+    "from": 28,
+    "to": 28,
+    "width": 31,
+    "height": 37,
+    "minDepth": 71,
+    "maxLength": 29,
+    "minAverageLength": 7.494736842105263,
+    "obstacles": 28,
+    "timeSeconds": 228
+  },
+  {
+    "from": 29,
+    "to": 29,
+    "width": 31,
+    "height": 38,
+    "minDepth": 72,
+    "maxLength": 29,
+    "minAverageLength": 7.536842105263158,
+    "obstacles": 29,
+    "timeSeconds": 224
+  },
+  {
+    "from": 30,
+    "to": 30,
+    "width": 31,
+    "height": 38,
+    "minDepth": 73,
+    "maxLength": 29,
+    "minAverageLength": 7.578947368421053,
+    "obstacles": 30,
+    "timeSeconds": 220
+  },
+  {
+    "from": 31,
+    "to": 31,
+    "width": 31,
+    "height": 38,
+    "minDepth": 73,
+    "maxLength": 30,
+    "minAverageLength": 7.621052631578948,
+    "obstacles": 31,
+    "timeSeconds": 216
+  },
+  {
+    "from": 32,
+    "to": 32,
+    "width": 31,
+    "height": 38,
+    "minDepth": 74,
+    "maxLength": 30,
+    "minAverageLength": 7.663157894736842,
+    "obstacles": 32,
+    "timeSeconds": 212
+  },
+  {
+    "from": 33,
+    "to": 33,
+    "width": 31,
+    "height": 38,
+    "minDepth": 75,
+    "maxLength": 30,
+    "minAverageLength": 7.705263157894737,
+    "obstacles": 33,
+    "timeSeconds": 208
+  },
+  {
+    "from": 34,
+    "to": 34,
+    "width": 31,
+    "height": 39,
+    "minDepth": 76,
+    "maxLength": 30,
+    "minAverageLength": 7.747368421052632,
+    "obstacles": 34,
+    "timeSeconds": 204
+  },
+  {
+    "from": 35,
+    "to": 35,
+    "width": 31,
+    "height": 39,
+    "minDepth": 77,
+    "maxLength": 31,
+    "minAverageLength": 7.7894736842105265,
+    "obstacles": 35,
+    "timeSeconds": 200
+  },
+  {
+    "from": 36,
+    "to": 36,
+    "width": 32,
+    "height": 39,
+    "minDepth": 78,
+    "maxLength": 31,
+    "minAverageLength": 7.831578947368421,
+    "obstacles": 36,
+    "timeSeconds": 196
+  },
+  {
+    "from": 37,
+    "to": 37,
+    "width": 32,
+    "height": 39,
+    "minDepth": 79,
+    "maxLength": 31,
+    "minAverageLength": 7.873684210526316,
+    "obstacles": 37,
+    "timeSeconds": 192
+  },
+  {
+    "from": 38,
+    "to": 38,
+    "width": 32,
+    "height": 40,
+    "minDepth": 80,
+    "maxLength": 31,
+    "minAverageLength": 7.91578947368421,
+    "obstacles": 38,
+    "timeSeconds": 188
+  },
+  {
+    "from": 39,
+    "to": 39,
+    "width": 32,
+    "height": 40,
+    "minDepth": 81,
+    "maxLength": 32,
+    "minAverageLength": 7.957894736842105,
+    "obstacles": 39,
+    "timeSeconds": 184
+  },
+  {
+    "from": 40,
+    "to": 40,
+    "width": 32,
+    "height": 40,
+    "minDepth": 82,
+    "maxLength": 32,
+    "minAverageLength": 8,
+    "obstacles": 40,
+    "timeSeconds": 180
   }
 ]

@@ -17,6 +17,11 @@ function drawIcon(c, kind, x, y, size, color) {
     } else if (kind === 'map') {
         c.beginPath(); c.moveTo(7, 6); c.lineTo(25, 6); c.lineTo(25, 16); c.lineTo(7, 16); c.lineTo(7, 26); c.lineTo(25, 26); c.stroke();
         for (const [px, py] of [[7,6],[25,6],[25,16],[7,16],[7,26],[25,26]]) { c.beginPath(); c.arc(px,py,3.7,0,Math.PI*2); c.fill(); }
+    } else if (kind === 'gift') {
+        c.strokeRect(3, 12, 26, 6); c.strokeRect(5, 18, 22, 12);
+        c.beginPath(); c.moveTo(16, 12); c.lineTo(16, 30);
+        c.moveTo(16, 12); c.bezierCurveTo(1, 12, 5, -1, 12, 5); c.lineTo(16, 12);
+        c.bezierCurveTo(31, 12, 27, -1, 20, 5); c.lineTo(16, 12); c.stroke();
     } else if (kind === 'share') {
         c.beginPath(); c.moveTo(10, 14); c.lineTo(24, 6); c.moveTo(10, 18); c.lineTo(24, 26); c.stroke();
         for (const [px,py] of [[7,16],[25,5],[25,27]]) { c.beginPath(); c.arc(px,py,4,0,Math.PI*2); c.fill(); }

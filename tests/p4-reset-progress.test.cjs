@@ -4,7 +4,7 @@ const { Controller } = require('../src/ui/controller');
 const { fakePlatform } = require('./helpers.cjs');
 const { bindPersistence, KEY, BACKUP, decode } = require('../src/persistence/store');
 const { generate } = require('../src/generation/generator');
-const make = () => new Controller(fakePlatform(), { generate: async (n, s) => generate(n, s) });
+const make = () => new Controller(Object.assign(fakePlatform(),{isTrial:true}), { generate: async (n, s) => generate(n, s) });
 
 test('P4 首页直接重置：取消回首页且各尺寸按钮可点、不重叠', () => {
     const { View } = require('../src/ui/view');

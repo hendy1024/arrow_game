@@ -22,7 +22,7 @@ function wrap(ctx, value, maxWidth, size = 15) { ctx.font = `${size}px sans-seri
         line += ch;
 } if (line)
     lines.push(line); return lines; }
-function layout(info) { const width = info.width, height = info.height; const top = Math.max(info.safeTop || 0, info.menuBottom || 0) + 12, bottom = height - (info.safeBottom || 0) - 16; const boardSize = Math.max(120, Math.min(width - 32, bottom - top - 290)); return { width, height, top, bottom, board: { x: (width - boardSize) / 2 + 10, y: top + 142, width: boardSize - 20, height: boardSize - 20 }, card: { x: (width - boardSize) / 2, y: top + 132, width: boardSize, height: boardSize } }; }
+function layout(info, level) { const width = info.width, height = info.height; const top = Math.max(info.safeTop || 0, info.menuBottom || 0) + 12, bottom = height - (info.safeBottom || 0) - 16; const boardSize = Math.max(120, Math.min(width - 32, bottom - top - 290)); return { width, height, top, bottom, board: { x: (width - boardSize) / 2 + 10, y: top + 142, width: boardSize - 20, height: boardSize - 20 }, card: { x: (width - boardSize) / 2, y: top + 132, width: boardSize, height: boardSize } }; }
 class View {
     constructor(ctx) { this.ctx = ctx; this.buttons = []; this.transform = null; this.lastLayout = null; this.camera = new Viewport(); this.cameraLevel = null; }
     button(id, label, x, y, w, h = 48, primary = false) { const c = this.ctx; rounded(c, x, y, w, h, 14, primary ? COLORS.ink : COLORS.paper, primary ? null : COLORS.line); text(c, label, x + w / 2, y + h / 2, 15, primary ? COLORS.paper : COLORS.ink, 'center', 500); this.buttons.push({ id, label, x, y, width: w, height: h }); }
@@ -33,6 +33,12 @@ class View {
     }
     render(app, info) {
         const c = this.ctx, l = layout(info);
+        if(app.screen==='game'&&app.session?.level.width!==app.session?.level.height){
+            const b=app.session.level,u=Math.min((l.width-52)/b.width,Math.max(100,l.bottom-l.top-310)/b.height);
+            l.board={x:(l.width-u*b.width)/2,y:l.top+142,width:u*b.width,height:u*b.height};
+            l.card={x:l.board.x-10,y:l.board.y-10,width:l.board.width+20,height:l.board.height+20};
+        }
+        if(app.screen==='game'&&app.session?.level.doors?.some(d=>d.edges)){l.board={x:l.board.x+14,y:l.board.y+14,width:l.board.width-28,height:l.board.height-28};}
         this.lastLayout = l;
         this.buttons = [];
         this.transform = null; this.dialogRect = null;
@@ -59,9 +65,14 @@ class View {
             this.iconButton('share', '分享领道具', 'share', w - 60, l.top);
             text(c, '分享', w - 68, l.top + 22, 12, COLORS.muted, 'right');
         }
-        const titleY = l.top + Math.max(80, usable * .12);
-        text(c, CONFIG.title, w / 2, titleY, 52, COLORS.ink, 'center', 500);
-        text(c, '让每条箭头，找到出口', w / 2, titleY + 43, 14, COLORS.muted, 'center');
+        if (!app.retryRead) {
+            const label = require('./rewards').claimed(app) ? '已领取' : '每日奖励';
+            this.iconButton('daily-reward', label, 'gift', w - 60, l.top + 52);
+            text(c, label, w - 68, l.top + 74, 12, COLORS.muted, 'right');
+        }
+        const titleY = l.top + Math.max(128, usable * .12);
+        text(c, CONFIG.title, w / 2, titleY, 44, COLORS.ink, 'center', 500);
+        text(c, '让每条箭头，找到出口', w / 2, titleY + 34, 14, COLORS.muted, 'center');
         const y = titleY + 78, previewSize = Math.min(w * .60, usable * .26);
         const by = Math.min(l.bottom - 181, Math.max(y + previewSize + 36, l.top + usable * .73));
         const size = Math.min(previewSize, by - y - (app.platform.isTrial ? 144 : 120)), x = (w - size) / 2;
@@ -81,7 +92,7 @@ class View {
         }
         this.iconButton('settings', '设置', 'settings', 16, l.bottom - 44);
         text(c, '设置', 68, l.bottom - 22, 12, COLORS.muted);
-        if (!app.retryRead) {
+        if (!app.retryRead && app.platform.isTrial === true) {
             this.iconButton('reset-progress-ask', '重置进度', 'reset', w - 60, l.bottom - 44);
             text(c, '重置进度', w - 68, l.bottom - 22, 12, COLORS.muted, 'right');
         }
@@ -119,8 +130,15 @@ class View {
         rounded(c, l.card.x, l.card.y, l.card.width, l.card.height, 22, COLORS.paper, COLORS.line);
         if (s && !app.loading && !app.loadError) {
             const colors = new Map(), offsets = new Map();
+            for(const d of s.level.doors||[])if(s.doorEffects.has(d.id)&&d.edges){
+                const blocked=new Map();require('../domain/doors').block(d,blocked);
+                for(const a of s.level.arrows)if(require('../domain/board').firstBlocker(a,s.level,blocked))colors.set(a.id,COLORS.green);
+            }
+            if (s.hintUntil > s.time) for (const id of s.hintIds || []) {
+                if (s.classify(id).type === 'allowed') colors.set(id, '#247cbd');
+            }
             for (const id of s.moves.keys())
-                colors.set(id, COLORS.green);
+                if(!(s.level.doors||[]).some(d=>d.keyArrowId===id))colors.set(id, COLORS.green);
             for (const [id, f] of s.feedback) {
                 colors.set(id, '#e23b36');
                 colors.set(f.blocker.id, COLORS.red);
@@ -128,8 +146,8 @@ class View {
             }
             if (this.cameraLevel !== s.level) { this.camera.reset(); this.cameraLevel = s.level; }
             this.camera.update(l.board);
-            c.save(); c.beginPath(); c.rect(l.board.x, l.board.y, l.board.width, l.board.height); c.clip();
-            this.transform = drawBoard(c, s.level, this.camera.boardRect(), { removed: s.removed, paths: s.paths(), colors, offsets, blockers: [...s.feedback.values()].map(f=>f.blocker.cell), grid: !!app.debugGrid });
+            c.save(); c.beginPath(); c.rect(l.board.x-24, l.board.y-24, l.board.width+48, l.board.height+48); c.clip();
+            this.transform = drawBoard(c, s.level, this.camera.boardRect(), { removed: s.removed, doorEffects:s.doorEffects, time:s.time, paths: s.paths(), colors, offsets, blockers: [...s.feedback.values()].map(f=>f.blocker.cell), grid: !!app.debugGrid });
             c.restore();
             if (app.tutorialStep === 1) {
                 const a = s.level.arrows.find(a => a.id === 'first'), p = this.transform.toScreen(a.path[a.path.length - 1]);
@@ -144,9 +162,9 @@ class View {
             rounded(c, 32, py, w - 64, 3, 1.5, COLORS.line);
             if (progress > 0)
                 rounded(c, 32, py, (w - 64) * progress, 3, 1.5, COLORS.green);
-            const message = app.message || (app.tutorialStep === 1 ? '点击圈中的箭头，沿方向移出棋盘' : this.camera.zoom > 1 ? '拖动查看棋盘，轻点箭头消除' : '箭头太小？点击放大后操作');
+            const message = app.message || require('../domain/doors').guideHint(s) || (app.tutorialStep === 1 ? '点击圈中的箭头，沿方向移出棋盘' : this.camera.zoom > 1 ? '拖动查看棋盘，轻点箭头消除' : '箭头太小？点击放大后操作');
             wrap(c, message, w - 42, 13).forEach((v, i) => text(c, v, w / 2, py + 30 + i * 20, 13, app.message ? COLORS.green : COLORS.muted, 'center'));
-            if (app.mode !== 'race') this.itemBar(app, py + 64, w);
+            this.itemBar(app, py + 64, w, false, app.mode === 'race');
             if (s.level.width >= 14) {
                 this.button(this.camera.zoom < 3 ? 'zoom-in' : 'zoom-reset', this.camera.zoom === 1 ? '放大' : this.camera.zoom === 2 ? '再放大' : '全图', w - 84, l.top, 68, 44);
             }
@@ -175,10 +193,20 @@ class View {
                 actions = [['rush-notice-close', '知道了', true]]; break;
             case 'item-empty':
                 title = '道具已用完'; description = '当前道具数量为0，暂时无法使用。'; actions = [['item-empty-close', '知道了', true]]; break;
+            case 'item-info': {
+                const details = {
+                    time: ['加时道具', '在限时关卡中，将剩余时间恢复为本关初始时间。时间耗尽时也可使用，保留当前棋盘进度。不限时关卡无需使用。'],
+                    life: ['容错道具', '将剩余容错次数恢复为本关初始次数。容错耗尽时也可使用，保留当前棋盘进度。'],
+                    shuffle: ['提示道具', '随机用蓝色标出一条当前可以移出的箭头，持续5秒，点击移出后结束提示。不会改变棋盘布局。']
+                };
+                [title, description] = details[app.itemInfoKind];
+                description += '\n当前数量：' + app.inventory[app.itemInfoKind] + '。在棋盘下方使用，每次消耗1个。' + (app.itemInfoKind === 'shuffle' ? '普通闯关和竞速模式均可使用。' : '竞速模式不可使用。');
+                actions = [['item-info-close', '知道了', true]]; break;
+            }
             case 'items': {
                 const s = app.session;
                 title = '道具'; description = '道具数量跨关卡保存，查看时暂停计时。';
-                actions = [['item-time', s.remainingMs === null ? '加时 · 本关不限时' : '恢复初始时间 · ' + app.inventory.time], ['item-life', s.lives === null ? '容错 · 本关不限次' : '恢复初始容错 · ' + app.inventory.life], ['item-shuffle', '重排剩余箭头 · ' + app.inventory.shuffle], ['items-done', '返回游戏', true]];
+                actions = [['item-time', s.remainingMs === null ? '加时 · 本关不限时' : '恢复初始时间 · ' + app.inventory.time], ['item-life', s.lives === null ? '容错 · 本关不限次' : '恢复初始容错 · ' + app.inventory.life], ['item-shuffle', '提示可移出箭头 · ' + app.inventory.shuffle], ['items-done', '返回游戏', true]];
                 break;
             }
             case 'shuffling':
@@ -218,8 +246,10 @@ class View {
                 description = app.session?.failureReason === 'timeout' ? '时间到了。重新挑战会恢复完整时间和 3 次机会。' : '本次机会已用完。先观察出口，再慢慢解开。';
                 actions = [['restart', '重新挑战', true], ['home', '返回首页']];
                 break;
+            case 'reward-items':
+                title=app.rewardPopup?.title||'获得道具'; description='\n\n'; actions=[['reward-close','收下',true]];break;
             case 'share-reward':
-                title='每日分享奖励'; description=require('./sharing').quota(app).rewardClaimed?'今日奖励已领取。可以继续分享，再次分享不会重复获得道具。':'分享返回可领取加时、容错、重排各5个。每日一次。';
+                title='每日分享奖励'; description=require('./sharing').quota(app).rewardClaimed?'今日奖励已领取。可以继续分享，再次分享不会重复获得道具。':'分享返回可领取加时、容错、提示各5个。每日一次。';
                 if(app.message) description+='\n'+app.message;
                 actions=[['share-start',require('./sharing').quota(app).rewardClaimed?'继续分享':'分享领取',true],['share-close','返回']];break;
             case 'share-wait':
@@ -234,14 +264,16 @@ class View {
                 description = '清除闯关进度，回到第 1 关。保留音效和震动设置。';
                 actions = [['reset-progress-cancel', '取消', true], ['reset-progress-confirm', '确认重置']];
                 break;
+            case 'mechanic-intro':
+                title=app.session.level.guide.title;description=app.session.level.guide.text;actions=[['mechanic-accept','跟着试一试',true]];break;
             case 'life-intro':
                 title = '多一点挑战';
                 description = '本关有 ' + app.session.level.lifeLimit + ' 次容错。点错扣1次，降到0时可选择使用容错道具继续；正确消除不扣次数。';
                 actions = [['life-accept', '知道了，开始', true]];
                 break;
             case 'challenge-intro':
-                title = ([3, 15].includes(app.currentLevel) && (app.session.level.obstacles || []).length) ? '石块出现了' : '限时挑战';
-                description = ([3,15].includes(app.currentLevel) && (app.session.level.obstacles || []).length) ? '灰色石块无法消除，会挡住路线。清空全部箭头即可通关。' + (app.session.level.timeLimitMs ? '本关限时' + Math.round(app.session.level.timeLimitMs/1000) + '秒。' : '') : '本关限时 ' + Math.round((app.session?.level.timeLimitMs || 0) / 1000) + ' 秒。时间归零或机会用完即失败；暂停和切后台时停止计时。';
+                title = ([4, 15].includes(app.currentLevel) && (app.session.level.obstacles || []).length) ? '石块出现了' : '限时挑战';
+                description = ([4,15].includes(app.currentLevel) && (app.session.level.obstacles || []).length) ? '灰色石块无法消除，会挡住路线。清空全部箭头即可通关。' + (app.session.level.timeLimitMs ? '本关限时' + Math.round(app.session.level.timeLimitMs/1000) + '秒。' : '') : '本关限时 ' + Math.round((app.session?.level.timeLimitMs || 0) / 1000) + ' 秒。时间归零或机会用完即失败；暂停和切后台时停止计时。';
                 actions = [['challenge-accept', '开始挑战', true]];
                 break;
         }
@@ -253,6 +285,7 @@ class View {
         this.dialogRect = { x, y, width: boxWidth, height: boxHeight };
         rounded(c, x, y, boxWidth, boxHeight, 24, COLORS.paper);
         text(c, title, w / 2, y + 40, 24, COLORS.ink, 'center', 500);
+        if(app.modal==='reward-items'){c.save();c.translate(x,0);this.itemBar({inventory:app.rewardPopup.items,platform:app.platform,retryRead:true},y+70,boxWidth,true);c.restore();}
         lines.forEach((line, i) => text(c, line, w / 2, y + 82 + i * 23, 14, COLORS.muted, 'center'));
         if (app.modal === 'race-friends' && app.platform.drawFriends) app.platform.drawFriends(c, { x: x + 24, y: y + 70, width: boxWidth - 48, height: 180 });
         actions.forEach(([id, label, primary], i) => {
@@ -268,14 +301,15 @@ class View {
             } else this.button(id, label, bx, by, bw, 48, primary);
         });
     }
-    itemBar(app, y, width, readOnly = false) {
+    itemBar(app, y, width, readOnly = false, hintOnly = false) {
         const c = this.ctx, size = (width - 80) / 3;
-        for (const [i, kind, label] of [[0, 'time', '加时'], [1, 'life', '容错'], [2, 'shuffle', '重排']]) {
-            const x = 28 + i * (size + 12), cx = x + size / 2, cy = y + 19;
+        for (const [i, kind, label] of [[0, 'time', '加时'], [1, 'life', '容错'], [2, 'shuffle', '提示']]) {
+            if(hintOnly && kind!=='shuffle')continue;
+            const x = hintOnly ? (width-size)/2 : 28 + i * (size + 12), cx = x + size / 2, cy = y + 19;
             rounded(c, x, y, size, 60, 14, COLORS.paper, COLORS.line);
             c.strokeStyle = COLORS.green; c.lineWidth = 2.3; c.beginPath();
             if (kind === 'time') { c.arc(cx, cy, 10, 0, Math.PI * 2); c.moveTo(cx, cy - 6); c.lineTo(cx, cy); c.lineTo(cx + 5, cy + 2); }
-            else if (kind === 'shuffle') { c.moveTo(cx - 11, cy - 5); c.lineTo(cx + 10, cy - 5); c.lineTo(cx + 5, cy - 10); c.moveTo(cx + 10, cy + 5); c.lineTo(cx - 11, cy + 5); c.lineTo(cx - 6, cy + 10); }
+            else if (kind === 'shuffle') { c.arc(cx, cy - 3, 8, Math.PI * .2, Math.PI * 2.8); c.lineTo(cx - 4, cy + 9); c.lineTo(cx + 4, cy + 9); c.lineTo(cx + 6.5, cy + 2); c.moveTo(cx - 3, cy + 13); c.lineTo(cx + 3, cy + 13); }
             c.stroke();
             if (kind === 'life') text(c, '♥', cx, cy, 26, COLORS.red, 'center');
             if (readOnly) {
@@ -283,7 +317,7 @@ class View {
                 c.font = '13px sans-serif';
                 const fontSize = Math.min(13, 13 * (size - 10) / Math.max(1, c.measureText(caption).width));
                 text(c, caption, cx, y + 45, fontSize, COLORS.ink, 'center');
-                if (app.platform.isTrial && !app.retryRead && !app.savedError) this.buttons.push({ id: 'trial-item-' + kind, x, y, width: size, height: 60, label });
+                if (!app.retryRead && !app.savedError) this.buttons.push({ id: (app.platform.isTrial === true ? 'trial-item-' : 'home-info-') + kind, x, y, width: size, height: 60, label });
                 continue;
             }
             text(c, label, cx - 5, y + 45, 13, COLORS.ink, 'center');

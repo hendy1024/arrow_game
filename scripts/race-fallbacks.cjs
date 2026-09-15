@@ -1,5 +1,5 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),{profile,generateRound}=require('../src/race/course'),{ROUNDS}=require('../src/race/rules'),{solve}=require('../src/generation/validate'),{acceptable}=require('../src/generation/generator');
-function matches(level,p){if(!level||level.width!==p.size||level.height!==p.size||level.arrows.some(a=>a.path.length>p.maxLength)||(level.obstacles||[]).length!==p.obstacles)return false;const v=solve(level);return v.valid&&acceptable(v.metrics,p);}
+function matches(level,p){if(!level||!((level.width===(p.width||p.size)&&level.height===(p.height||p.size))||(level.height===(p.width||p.size)&&level.width===(p.height||p.size)))||level.arrows.some(a=>a.path.length>p.maxLength)||(level.obstacles||[]).length!==p.obstacles)return false;const v=solve(level);return v.valid&&acceptable(v.metrics,p);}
 function prepare(){for(const kind of ['daily','weekly']){const levels=[];for(let n=1;n<=ROUNDS;n++){const level=generateRound(kind+':2026-09-14',n);if(!matches(level,profile(n,kind)))throw Error('赛道验证失败');levels.push(level);}const f=path.resolve(__dirname,'../src/race/'+(kind==='daily'?'daily-fallbacks':'fallbacks')+'.js'),source="'use strict';\nmodule.exports="+JSON.stringify(levels)+';\n';if(fs.readFileSync(f,'utf8')!==source)fs.writeFileSync(f,source);}}
 module.exports={prepare,matches};

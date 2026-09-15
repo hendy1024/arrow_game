@@ -2,6 +2,7 @@
 const { segmentDistance } = require('../movement/path');
 const { DIRS } = require('../domain/board');
 function hitArrow(level, point, removed = new Set(), paths = new Map(), tolerance = .48) {
+    if ((level.doors||[]).some(d=>d.cell&&!require('../domain/doors').isOpen(d,level,removed)&&Math.abs(point[0]-d.cell[0])<=.4&&Math.abs(point[1]-d.cell[1])<=.4))return null;
     if ((level.obstacles || []).some(p => Math.abs(point[0] - p[0]) <= .35 && Math.abs(point[1] - p[1]) <= .35)) return null;
     let best = null, distance = Infinity;
     for (const a of level.arrows) {

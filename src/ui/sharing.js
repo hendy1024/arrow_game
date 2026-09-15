@@ -17,9 +17,11 @@ function returned(app){
  const p=app.sharePending;if(!p?.departed)return;app.sharePending=null;app.modal=p.modal;
  const q=quota(app);app.share=q;
  if(p.kind==='daily'){
-  if(!q.rewardClaimed){for(const k of ['time','life','shuffle'])app.inventory[k]+=5;q.rewardClaimed=true;app.say('已领取：加时、容错、重排各5个',3500);}
+  const gained=!q.rewardClaimed;
+  if(!q.rewardClaimed){q.rewardClaimed=true;app.say('已领取：加时、容错、提示各5个',3500);}
   else app.say('今日奖励已领取，可继续分享',3500);
   if(p.wasPlaying)p.session.resume();app.modal='share-reward';
+  if(gained)require('./rewards').grant(app,{time:5,life:5,shuffle:5},'每日分享奖励','share-reward');
  }else if(app.session===p.session&&q.rescues<10&&rescue[p.kind].eligible(app)){
   q.rescues++;rescue[p.kind].revive(app,false);
  }

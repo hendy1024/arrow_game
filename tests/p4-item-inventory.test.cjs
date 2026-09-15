@@ -19,8 +19,9 @@ test('P4 首页库存显示实时数量，零库存及大数量不溢出，小�
    for(const caption of captions){
     const [,label,x,y]=caption;
     assert.ok(y>v.lastLayout.top+120&&y<start.y-30,label);
-    assert.equal(v.hitButton(x,y),null);
-    assert.ok(!v.buttons.some(b=>x>=b.x&&x<=b.x+b.width&&y>=b.y&&y<=b.y+b.height));
+    const kind=['time','life','shuffle'][labels.indexOf(label)];
+    assert.equal(v.hitButton(x,y),'home-info-'+kind);
+    assert.ok(!v.buttons.some(b=>b.id!=='home-info-'+kind&&x>=b.x&&x<=b.x+b.width&&y>=b.y&&y<=b.y+b.height));
    }
    assert.equal(v.buttons.some(b=>b.id.startsWith('item-')),false);
   }
@@ -41,6 +42,6 @@ test('P4 默认每种10个、耗尽弹窗，连续使用按实际次数存档且
  const b=make();restore(b,snapshot(a));assert.equal(b.inventory.time,0);assert.equal(b.session.remainingMs,before);await b.action('start');b.action('pause');b.action('restart-ask');b.action('restart');assert.equal(b.inventory.time,0);assert.equal(b.session.remainingMs,before);
 });
 test('P4 挑战共用库存，返回、普通进度重置及重载不返还；旧存档只初始化一次',async()=>{
- const a=make();a.unlocked=20;a.challengeUnlockSeen=true;await a.action('challenge');a.action('rush-accept');a.action('item-life');assert.equal(a.inventory.life,9);assert.equal(snapshot(a).inventory.life,9);a.action('pause');a.action('home');assert.equal(a.inventory.life,9);a.action('reset-progress-ask');a.action('reset-progress-confirm');assert.equal(a.inventory.life,9);
+ const a=make();a.unlocked=20;a.challengeUnlockSeen=true;await a.action('challenge');a.action('rush-accept');a.action('item-life');assert.equal(a.inventory.life,9);assert.equal(snapshot(a).inventory.life,9);a.action('pause');a.action('home');assert.equal(a.inventory.life,9);a.platform.isTrial=true;a.action('reset-progress-ask');a.action('reset-progress-confirm');assert.equal(a.inventory.life,9);
  const b=make();restore(b,snapshot(a));assert.equal(b.inventory.life,9);const old=snapshot(make());delete old.inventory;restore(b,old);assert.equal(b.inventory.life,10);b.inventory.life=0;const stored=snapshot(b);restore(b,stored);assert.equal(b.inventory.life,0);stored.inventory.life=-1;assert.equal(validate(stored),false);
 });

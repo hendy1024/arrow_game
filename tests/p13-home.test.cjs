@@ -21,6 +21,12 @@ test('P13 浏览器点击体验版道具与主页新入口，补充库存重载�
   await click('map-home');await click('settings');assert.equal(await e('__arrowDebug.app.modal'),'settings');await click('settings-done');
   await click('reset-progress-ask');assert.equal(await e('__arrowDebug.app.modal'),'reset-progress');await click('reset-progress-cancel');
   await c.send('Page.reload',{},s);await ready();assert.deepEqual(await e('__arrowDebug.app.inventory'),{time:11,life:11,shuffle:11});assert.equal(await e('__arrowDebug.view.buttons.some(b=>b.id.startsWith("trial-item-"))'),false);
+ for(const kind of ['time','life','shuffle']){
+  await click('home-info-'+kind);assert.equal(await e('__arrowDebug.app.modal'),'item-info');
+  assert.deepEqual(await e('__arrowDebug.app.inventory'),{time:11,life:11,shuffle:11});
+  assert.ok(await e('__arrowDebug.view.dialogRect.y+__arrowDebug.view.dialogRect.height<=568'));
+  await click('item-info-close');assert.equal(await e('__arrowDebug.app.screen'),'home');
+ }
  }finally{await b.close();}
 });
 
@@ -31,9 +37,11 @@ test('P13 首页入口位置、小按钮触摸范围及体验版库存卡不重�
   const get=id=>v.buttons.find(b=>b.id===id),start=get('start'),map=get('level-map'),share=get('share'),settings=get('settings'),reset=get('reset-progress-ask');
   const title=p.ctx.calls.find(c=>c[0]==='fillText'&&c[1]==='箭间');assert.ok(title[3]-26>=share.y+share.height+8);
   assert.equal(start.x+start.width/2,width/2);assert.ok(map.x>=start.x+start.width);assert.ok(Math.abs(map.y-start.y)<=5);
-  assert.equal(share.y,v.lastLayout.top);assert.ok(settings.x<start.x);assert.ok(reset.x>map.x);assert.equal(settings.y+settings.height,v.lastLayout.bottom);
+  assert.equal(share.y,v.lastLayout.top);assert.ok(settings.x<start.x);if(isTrial)assert.ok(reset.x>map.x);else assert.equal(reset,undefined);assert.equal(settings.y+settings.height,v.lastLayout.bottom);
   assert.equal(share.x+share.width,width-16);assert.equal(share.width,44);assert.equal(get('rank').x,16);
-  assert.equal(p.ctx.calls.filter(c=>c[0]==='scale'&&c[1]===34/32&&c[2]===34/32).length,4);
+  const daily=get('daily-reward');assert.equal(daily.x,share.x);assert.equal(daily.width,share.width);assert.equal(daily.height,share.height);assert.equal(daily.y,share.y+52);assert.ok(title[3]-22>=daily.y+daily.height+8);
+  assert.ok(p.ctx.calls.some(c=>c[0]==='fillText'&&c[1]==='每日奖励'&&c[2]===daily.x-8&&c[3]===daily.y+22));
+  assert.equal(p.ctx.calls.filter(c=>c[0]==='scale'&&c[1]===34/32&&c[2]===34/32).length,isTrial?5:4);
   assert.equal(p.ctx.calls.some(c=>c[0]==='fillText'&&['⚙','↺','▦'].includes(c[1])),false);
   assert.equal(v.buttons.filter(b=>b.id.startsWith('trial-item-')).length,isTrial?3:0);
   for(const b of v.buttons){assert.ok(b.width>=44&&b.height>=44);assert.ok(b.x>=0&&b.x+b.width<=width&&b.y>=v.lastLayout.top&&b.y+b.height<=v.lastLayout.bottom);assert.equal(v.hitButton(b.x+b.width/2,b.y+b.height/2),b.id);

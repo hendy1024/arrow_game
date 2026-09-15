@@ -20,7 +20,8 @@ function wav(frequencies, seconds) {
     }
     return buffer;
 }
-// Original 16-second Cmaj7 / Am7 / Fmaj7 / Gsus loop. Wrapped note tails
+// Original 120 BPM, eight-bar C-major loop: bright mallet melody and light bass.
+// Wrapped note tails
 // keep the seam continuous; no downloaded recording or network dependency.
 function musicWav() {
     const rate = 22050, seconds = 16, length = rate * seconds;
@@ -29,16 +30,19 @@ function musicWav() {
     function note(start, duration, midi, gain, bell) {
         for (let i = 0; i < duration * rate; i++) {
             const t = i / rate, u = t / duration, phase = 2 * Math.PI * hz(midi) * t;
-            const envelope = bell ? Math.min(1, t / .018) * Math.exp(-3 * t) * Math.min(1, (duration - t) / .2) : Math.sin(Math.PI * u) ** 2;
+            const envelope = bell ? Math.min(1, t / .008) * Math.exp(-7 * t) * Math.min(1, (duration - t) / .08) : Math.sin(Math.PI * u) ** 2;
             const tone = Math.sin(phase) + (bell ? .25 * Math.sin(2 * phase) * Math.exp(-4 * t) : .12 * Math.sin(2 * phase));
             samples[(Math.round(start * rate) + i) % length] += gain * envelope * tone;
         }
     }
-    const chords = [[48, 55, 59, 64], [45, 52, 55, 60], [41, 48, 52, 57], [43, 50, 55, 60]];
-    const melody = [[72, 76, 79, 74], [72, 76, 79, 76], [69, 72, 76, 72], [67, 74, 79, 74]];
-    for (let bar = 0; bar < 4; bar++) {
-        for (const pitch of chords[bar]) note(bar * 4, 5, pitch, .07, false);
-        for (let beat = 0; beat < 4; beat++) note(bar * 4 + beat, 2, melody[bar][beat], .23, true);
+    const chords = [[48,55,64],[53,60,69],[55,62,71],[48,55,64],[45,52,60],[53,60,69],[55,62,71],[48,55,64]];
+    const melody = [[72,76,79,76,81,79,76,74],[77,81,84,81,79,77,76,72],[74,79,83,79,81,79,77,74],[76,79,84,79,76,74,72,76],[76,81,84,81,79,76,74,72],[77,81,84,81,86,84,81,77],[79,83,86,83,81,79,77,74],[76,79,84,79,76,74,72,79]];
+    for (let bar = 0; bar < 8; bar++) {
+        for (let beat = 0; beat < 4; beat++) {
+            note(bar*2+beat*.5,.35,chords[bar][beat%2?1:0]-12,.19,true);
+            for(const pitch of chords[bar].slice(1))note(bar*2+beat*.5+.25,.22,pitch,.08,true);
+        }
+        for (let step = 0; step < 8; step++) note(bar * 2 + step*.25, .48, melody[bar][step], step%2?.22:.28, true);
     }
     for (let i = 0; i < length; i++) out.writeInt16LE(Math.round(Math.max(-.9, Math.min(.9, samples[i])) * 32767), 44 + i * 2);
     return out;

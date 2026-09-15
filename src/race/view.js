@@ -11,9 +11,9 @@ function dialog(app) {
         case 'race-unlocked': title = '竞速模式已解锁'; description = '主页可进入每日、每周3关竞速，与好友比较总用时。'; actions = [['race-notice-close', '知道了', true]]; break;
         case 'race-menu': title = '竞速模式'; description = ''; actions = [['race-daily', '每日竞速', true], ['race-weekly', '每周竞速', true]]; break;
         case 'race-loading': title = '准备赛道'; description = '正在检查3关的通路…'; actions = [['home', '取消']]; break;
-        case 'race-ready': title = '3关竞速'; description = (kind + '竞速：' + sizes[0] + '×' + sizes[0] + '起，共3关。') + '不限时、不限点错次数、无道具。关间等待不计时；关内暂停和切后台仍计时。'; actions = [['race-accept', '开始计时', true], ['home', '返回首页']]; break;
+        case 'race-ready': title = '3关竞速'; description = (kind + '竞速：' + sizes[0] + '×' + sizes[0] + '起，共3关。') + '不限时、不限点错次数，可使用提示道具。关间等待不计时；关内暂停和切后台仍计时。'; actions = [['race-accept', '开始计时', true], ['home', '返回首页']]; break;
         case 'race-error': title = '赛道准备失败'; description = '请重试。'; actions = [['race-retry', '重试', true], ['home', '返回首页']]; break;
-        case 'race-finished': title = '3关全部完成'; description = '总用时 ' + format(app.race.finishedElapsed) + '\n' + (app.race.saveError ? '本机保存失败，请重试' : '个人成绩已保存') + '\n' + (app.race.publishStatus || '微信中可同步好友成绩'); actions = [['race-retry-save', '重试保存 / 同步'], ['race-retry', '再跑一轮', true], ['home', '返回首页']]; break;
+        case 'race-finished': title = '3关全部完成'; description = '总用时 ' + format(app.race.finishedElapsed) + '\n' + (app.race.saveError ? '本机保存失败，请重试' : '个人成绩已保存') + '\n' + (app.race.publishStatus || '微信中可自动同步好友成绩'); actions = [...(app.race.saveError||app.race.publishStatus?.includes('重试')?[['race-retry-save', '立即重试']]:[]), ['race-retry', '再跑一轮', true], ['home', '返回首页']]; break;
         case 'race-history': {
             title = kind + '个人历史';
             try {
